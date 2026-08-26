@@ -7,10 +7,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: ./Machi Pottu Thaakku
-
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
@@ -18,22 +14,41 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 20
+
+      - name: Check project files
+        run: |
+          echo "Repository:"
+          ls -la
+          echo "Project folder:"
+          ls -la "Machi Pottu Thaakku"
+          echo "Package:"
+          ls -la "Machi Pottu Thaakku/package.json"
 
       - name: Install dependencies
-        run: npm install
+        run: |
+          cd "Machi Pottu Thaakku"
+          npm install
 
       - name: Install Capacitor
-        run: npm install @capacitor/core @capacitor/cli @capacitor/android
+        run: |
+          cd "Machi Pottu Thaakku"
+          npm install @capacitor/core @capacitor/cli @capacitor/android
 
       - name: Initialize Capacitor
-        run: npx cap init "Machi Pottu Thaaku" "com.machipottuthaaku.app" --web-dir=.
+        run: |
+          cd "Machi Pottu Thaakku"
+          npx cap init "Machi Pottu Thaaku" "com.machipottuthaaku.app" --web-dir=.
 
       - name: Add Android platform
-        run: npx cap add android
+        run: |
+          cd "Machi Pottu Thaakku"
+          npx cap add android
 
       - name: Sync web project
-        run: npx cap sync android
+        run: |
+          cd "Machi Pottu Thaakku"
+          npx cap sync android
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -42,11 +57,13 @@ jobs:
           java-version: 17
 
       - name: Build APK
-        run: ./gradlew assembleDebug
-        working-directory: ./Machi Pottu Thaakku/android
+        run: |
+          cd "Machi Pottu Thaakku/android"
+          chmod +x gradlew
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: machi-pottu-thaaku-debug-apk
-          path: ./Machi Pottu Thaakku/android/app/build/outputs/apk/debug/app-debug.apk
+          path: "Machi Pottu Thaakku/android/app/build/outputs/apk/debug/app-debug.apk"
