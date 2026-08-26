@@ -67,6 +67,18 @@ jobs:
             @capacitor/cli \
             @capacitor/android
 
+      - name: Diagnostic - Print Environment and Capacitor Versions
+        shell: bash
+        run: |
+          echo "===== NODE VERSION ====="
+          node -v
+
+          echo "===== NPM VERSION ====="
+          npm -v
+
+          echo "===== CAPACITOR VERSIONS ====="
+          npm list @capacitor/core @capacitor/cli @capacitor/android --depth=0 || true
+
       - name: Create Capacitor web directory
         shell: bash
         run: |
