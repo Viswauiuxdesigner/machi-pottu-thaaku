@@ -16,22 +16,31 @@ jobs:
         with:
           node-version: 20
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
       - name: Find project folder
+        shell: bash
         run: |
-          echo "Searching project..."
-          find . -name package.json -not -path './.git/*'
+          PROJECT_DIR=$(find . -name package.json -not -path './.git/*' -print -quit | xargs dirname)
+          echo "PROJECT_DIR=$PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found project at: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
 
       - name: Install dependencies
+        shell: bash
         run: |
-          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
-          echo "PROJECT_DIR=$PROJECT_DIR"
           cd "$PROJECT_DIR"
           npm install
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
       - name: Create Capacitor web directory
+        shell: bash
         run: |
-          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
           cd "$PROJECT_DIR"
 
           mkdir -p www
@@ -48,18 +57,14 @@ jobs:
             <title>Machi Pottu Thaaku</title>
           </head>
           <body>
-            <script>
-              window.location.replace(
-                "https://starlit-sable-83184f.netlify.app/"
-              );
-            </script>
+            <p>Loading Machi Pottu Thaaku...</p>
           </body>
           </html>
           EOF
 
       - name: Create Capacitor config
+        shell: bash
         run: |
-          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
           cd "$PROJECT_DIR"
 
           cat > capacitor.config.json <<'EOF'
@@ -75,26 +80,20 @@ jobs:
           EOF
 
       - name: Add Android platform
+        shell: bash
         run: |
-          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
           cd "$PROJECT_DIR"
           npx cap add android
 
       - name: Sync Capacitor
+        shell: bash
         run: |
-          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
           cd "$PROJECT_DIR"
           npx cap sync android
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
       - name: Build Debug APK
+        shell: bash
         run: |
-          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
           cd "$PROJECT_DIR/android"
           chmod +x gradlew
           ./gradlew assembleDebug
