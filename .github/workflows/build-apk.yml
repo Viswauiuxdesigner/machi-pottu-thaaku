@@ -22,54 +22,57 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Find project
+      - name: Find project folder
         shell: bash
         run: |
           echo "Repository contents:"
-          ls -la
-
-          echo "Searching for package.json..."
+          find . -maxdepth 3 -type f | sort | head -200
 
           PROJECT_DIR=""
 
-          while IFS= read -r -d '' file; do
-            DIR="$(dirname "$file")"
+          while IFS= read -r -d '' FILE; do
+            DIR="$(dirname "$FILE")"
 
             if [ -f "$DIR/index.html" ]; then
               PROJECT_DIR="$DIR"
               break
             fi
-          done < <(find . -type f -name "package.json" -not -path "./.git/*" -print0)
+          done < <(
+            find . \
+              -type f \
+              -name "package.json" \
+              -not -path "./.git/*" \
+              -print0
+          )
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Could not find project directory."
-            echo "Available package.json files:"
-            find . -type f -name "package.json" -not -path "./.git/*" -print
+            echo "ERROR: Project folder not found."
             exit 1
           fi
 
-          echo "Project found at: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project folder found:"
+          echo "$PROJECT_DIR"
 
-          echo "Project files:"
-          ls -la "$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         shell: bash
         run: |
           cd "$PROJECT_DIR"
 
-          echo "Installing npm dependencies..."
           npm install
 
-          echo "Installing Capacitor..."
-          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npm install \
+            @capacitor/core \
+            @capacitor/cli \
+            @capacitor/android
 
       - name: Create Capacitor web directory
         shell: bash
         run: |
           cd "$PROJECT_DIR"
 
+          rm -rf www
           mkdir -p www
 
           cat > www/index.html <<'EOF'
@@ -111,7 +114,6 @@ jobs:
         run: |
           cd "$PROJECT_DIR"
 
-          echo "Adding Android platform..."
           npx cap add android
 
       - name: Sync Capacitor
@@ -119,18 +121,53 @@ jobs:
         run: |
           cd "$PROJECT_DIR"
 
-          echo "Syncing Android project..."
           npx cap sync android
 
-      - name: Build Debug APK
+      - name: Fix Kotlin dependency conflict
+        shell: bash
+        run: |
+          cd "$PROJECT_DIR/android"
+
+          echo "Applying Kotlin dependency resolution..."
+
+          cat >> build.gradle <<'EOF'
+
+          allprojects {
+              configurations.all {
+                  resolutionStrategy.eachDependency { details ->
+                      if (details.requested.group == "org.jetbrains.kotlin") {
+                          details.useVersion("1.8.22")
+                      }
+                  }
+              }
+          }
+          EOF
+
+          echo "Kotlin dependency fix applied."
+
+      - name: Build Android APK
         shell: bash
         run: |
           cd "$PROJECT_DIR/android"
 
           chmod +x gradlew
 
-          echo "Building APK..."
-          ./gradlew assembleDebug
+          ./gradlew clean
+
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          APK="$PROJECT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK successfully generated:"
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
