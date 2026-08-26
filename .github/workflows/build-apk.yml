@@ -66,7 +66,7 @@ jobs:
             @capacitor/core@8.5.0 \
             @capacitor/cli@7.6.8 \
             @capacitor/android@8.5.0 \
-            @capacitor/filesystem@8.1.3 \
+            @capacitor/filesystem@8.5.0 \
             capacitor-music-controls-plugin@8.0.0
 
       - name: Create Capacitor web directory
@@ -124,28 +124,6 @@ jobs:
           cd "$PROJECT_DIR"
 
           npx cap sync android
-
-      - name: Fix Kotlin dependency conflict
-        shell: bash
-        run: |
-          cd "$PROJECT_DIR/android"
-
-          echo "Applying Kotlin dependency resolution..."
-
-          cat >> build.gradle <<'EOF'
-
-          allprojects {
-              configurations.all {
-                  resolutionStrategy.eachDependency { details ->
-                      if (details.requested.group == "org.jetbrains.kotlin") {
-                          details.useVersion("1.8.22")
-                      }
-                  }
-              }
-          }
-          EOF
-
-          echo "Kotlin dependency fix applied."
 
       - name: Build Android APK
         shell: bash
