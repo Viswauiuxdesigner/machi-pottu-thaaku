@@ -16,38 +16,40 @@ jobs:
         with:
           node-version: 20
 
-      - name: Check project files
+      - name: Find project
         run: |
-          echo "Repository:"
-          ls -la
-          echo "Project folder:"
-          ls -la "Machi Pottu Thaakku"
-          echo "Package:"
-          ls -la "Machi Pottu Thaakku/package.json"
+          echo "Searching for package.json..."
+          find . -name package.json -not -path './.git/*'
 
       - name: Install dependencies
         run: |
-          cd "Machi Pottu Thaakku"
+          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
+          echo "Project directory: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
           npm install
 
       - name: Install Capacitor
         run: |
-          cd "Machi Pottu Thaakku"
+          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
+          cd "$PROJECT_DIR"
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
       - name: Initialize Capacitor
         run: |
-          cd "Machi Pottu Thaakku"
+          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
+          cd "$PROJECT_DIR"
           npx cap init "Machi Pottu Thaaku" "com.machipottuthaaku.app" --web-dir=.
 
       - name: Add Android platform
         run: |
-          cd "Machi Pottu Thaakku"
+          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
+          cd "$PROJECT_DIR"
           npx cap add android
 
       - name: Sync web project
         run: |
-          cd "Machi Pottu Thaakku"
+          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
+          cd "$PROJECT_DIR"
           npx cap sync android
 
       - name: Setup Java
@@ -58,7 +60,8 @@ jobs:
 
       - name: Build APK
         run: |
-          cd "Machi Pottu Thaakku/android"
+          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
+          cd "$PROJECT_DIR/android"
           chmod +x gradlew
           ./gradlew assembleDebug
 
@@ -66,4 +69,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: machi-pottu-thaaku-debug-apk
-          path: "Machi Pottu Thaakku/android/app/build/outputs/apk/debug/app-debug.apk"
+          path: "**/android/app/build/outputs/apk/debug/app-debug.apk"
