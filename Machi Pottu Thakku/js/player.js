@@ -65,6 +65,33 @@ class AudioPlayer {
             window.uiManager.showNotification("Unable to play this song.", "error");
             this.syncUIState(false);
         });
+        
+        // Setup Music Controls Listener if running natively
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.MusicControls) {
+            const MusicControls = window.Capacitor.Plugins.MusicControls;
+            MusicControls.addListener('controlsNotification', (event) => {
+                if (!event) return;
+                const action = event.message;
+                
+                switch (action) {
+                    case 'music-controls-next':
+                        this.playNext();
+                        break;
+                    case 'music-controls-previous':
+                        this.playPrev();
+                        break;
+                    case 'music-controls-pause':
+                        this.togglePlay();
+                        break;
+                    case 'music-controls-play':
+                        this.togglePlay();
+                        break;
+                    case 'music-controls-destroy':
+                        this.togglePlay();
+                        break;
+                }
+            });
+        }
     }
 
     syncUIState(isPlaying) {
@@ -89,6 +116,13 @@ class AudioPlayer {
         });
         
         if (window.lucide) lucide.createIcons();
+        
+        // Sync native controls
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.MusicControls) {
+            window.Capacitor.Plugins.MusicControls.updateIsPlaying({
+                isPlaying: isPlaying
+            }).catch(e => console.log(e));
+        }
     }
 
     async playTrack(track, queueList = [], index = 0) {
@@ -116,6 +150,35 @@ class AudioPlayer {
         this.updateUI();
         
         try {
+            // Check Offline First
+            let isOfflineTrack = false;
+            if (window.OfflineManager) {
+                isOfflineTrack = await window.OfflineManager.isDownloaded(track.id);
+            }
+            
+            if (isOfflineTrack) {
+                console.log("[PLAYBACK] Playing local downloaded track");
+                const localUrl = await window.OfflineManager.getLocalUrl(track.id);
+                if (localUrl) {
+                    this.audio.src = localUrl;
+                    this.audio.play().catch(err => console.error("Local play prevented:", err));
+                    return;
+                }
+            }
+            
+            // Check if user is completely offline and track is not downloaded
+            if (!navigator.onLine) {
+                console.warn("[PLAYBACK] Offline and track not downloaded");
+                window.uiManager.showNotification("Cannot play this song while offline", "error");
+                
+                // Try to play next track automatically if available
+                setTimeout(() => {
+                    this.playNext(true); // pass flag if needed
+                }, 2000);
+                
+                return;
+            }
+
             console.log("[FILEBASE PLAYBACK] Requesting signed URL");
             const requestUrl = `/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`;
             console.log(`[FILEBASE PLAYBACK] Request URL: ${requestUrl}`);
@@ -141,6 +204,9 @@ class AudioPlayer {
             console.error("[FILEBASE PLAYBACK] Error fetching presigned URL:", error);
             window.uiManager.showNotification("Playback failed: " + error.message, "error");
             this.syncUIState(false);
+            
+            // Auto skip on error if not network related
+            setTimeout(() => this.playNext(true), 2000);
         }
     }
 
@@ -154,13 +220,18 @@ class AudioPlayer {
         }
     }
 
-    playNext() {
+    playNext(autoSkip = false) {
         if (this.queueIndex >= 0 && this.queueIndex < this.queue.length - 1) {
             this.queueIndex++;
             this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
         } else {
-            this.audio.pause();
-            this.audio.currentTime = 0;
+            // End of queue
+            if (!autoSkip) {
+                this.audio.pause();
+                this.audio.currentTime = 0;
+            } else {
+                this.syncUIState(false);
+            }
         }
     }
 
@@ -255,6 +326,22 @@ class AudioPlayer {
             navigator.mediaSession.setActionHandler('pause', () => this.togglePlay());
             navigator.mediaSession.setActionHandler('previoustrack', () => this.playPrev());
             navigator.mediaSession.setActionHandler('nexttrack', () => this.playNext());
+        }
+        
+        // Set Native Foreground Music Controls if available (Capacitor)
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.MusicControls) {
+            const MusicControls = window.Capacitor.Plugins.MusicControls;
+            MusicControls.create({
+                track: track.title,
+                artist: track.artist,
+                cover: track.thumbnail || '',
+                isPlaying: true,
+                dismissable: false,
+                hasPrev: true,
+                hasNext: true,
+                hasClose: true,
+                ticker: `Playing ${track.title}`
+            }).catch(e => console.log('MusicControls create error', e));
         }
         
         // Reset progress visually

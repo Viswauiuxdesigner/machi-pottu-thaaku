@@ -59,6 +59,11 @@ class App {
         // Setup Search
         this.setupSearch();
         
+        // Setup Network Listeners
+        window.addEventListener('online', () => this.updateNetworkStatus(true));
+        window.addEventListener('offline', () => this.updateNetworkStatus(false));
+        this.updateNetworkStatus(navigator.onLine);
+        
         // Setup Load More Button (Hidden for local library as search is instant/unlimited)
         const btnLoadMoreContainer = document.getElementById('load-more-container');
         if (btnLoadMoreContainer) {
@@ -154,6 +159,19 @@ class App {
         const greetingEl = document.getElementById('header-greeting');
         if (greetingEl) {
             greetingEl.textContent = `${greeting}, Machi 👋`;
+        }
+    }
+    
+    updateNetworkStatus(isOnline) {
+        const el = document.getElementById('network-status');
+        if (!el) return;
+        
+        if (isOnline) {
+            el.className = 'network-status online';
+            el.innerHTML = '<span class="status-dot"></span> <span class="status-text">Online</span>';
+        } else {
+            el.className = 'network-status offline';
+            el.innerHTML = '<span class="status-dot" style="background-color: #f44336; box-shadow: 0 0 8px rgba(244, 67, 54, 0.5);"></span> <span class="status-text">Offline</span>';
         }
     }
 
@@ -267,6 +285,12 @@ class App {
     loadFavorites() {
         const tracks = window.storageManager.getFavorites();
         window.uiManager.renderTrackList(tracks, 'favorites-results', "You haven't favorited any tracks yet.");
+    }
+    
+    loadDownloads() {
+        if (!window.OfflineManager) return;
+        const tracks = window.OfflineManager.getOfflineTracks();
+        window.uiManager.renderTrackList(tracks, 'downloads-results', "You haven't downloaded any tracks yet. Download tracks to listen offline.");
     }
 }
 

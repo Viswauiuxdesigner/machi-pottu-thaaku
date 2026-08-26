@@ -32,6 +32,7 @@ class UIManager {
         // Refresh specific page data if needed
         if (pageId === 'saved') window.app.loadSavedTracks();
         if (pageId === 'favorites') window.app.loadFavorites();
+        if (pageId === 'downloads' && window.app.loadDownloads) window.app.loadDownloads();
         if (pageId === 'storage') window.app.updateStorageStats();
         
         // Scroll to top
@@ -126,6 +127,9 @@ class UIManager {
                     <i data-lucide="heart" ${isFav ? 'fill="currentColor"' : ''}></i>
                 </button>
                 
+                <button class="icon-btn action-download" title="Download" aria-label="Download">
+                    <i data-lucide="download"></i>
+                </button>
                 
                 <span class="track-duration">${this.formatDuration(track.duration)}</span>
                 <button class="icon-btn action-play" aria-label="Play" data-video-id="${track.videoId || ''}">
@@ -162,6 +166,63 @@ class UIManager {
         const durationSpan = row.querySelector('.track-duration');
         if (!track.duration) {
             this.loadTrackMetadata(track, durationSpan);
+        }
+        
+        // Download action
+        const dlBtn = row.querySelector('.action-download');
+        const dlIcon = dlBtn.querySelector('i');
+        
+        // Initial state
+        if (window.OfflineManager) {
+            window.OfflineManager.isDownloaded(track.id).then(isDl => {
+                if (isDl) {
+                    dlBtn.classList.add('active');
+                    dlIcon.setAttribute('data-lucide', 'check-circle');
+                    dlIcon.style.color = 'var(--primary-color)';
+                    if (window.lucide) lucide.createIcons({root: dlBtn});
+                }
+            });
+            
+            dlBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                
+                const isDl = await window.OfflineManager.isDownloaded(track.id);
+                
+                if (isDl) {
+                    // Delete
+                    if (confirm('Remove from downloads?')) {
+                        await window.OfflineManager.deleteTrack(track.id);
+                        dlBtn.classList.remove('active');
+                        dlIcon.setAttribute('data-lucide', 'download');
+                        dlIcon.style.color = '';
+                        if (window.lucide) lucide.createIcons({root: dlBtn});
+                        
+                        // If we are on the downloads page, refresh
+                        if (document.getElementById('page-downloads').classList.contains('active') && window.app.loadDownloads) {
+                            window.app.loadDownloads();
+                        }
+                    }
+                } else {
+                    // Download
+                    dlIcon.setAttribute('data-lucide', 'loader');
+                    dlIcon.classList.add('spin');
+                    if (window.lucide) lucide.createIcons({root: dlBtn});
+                    
+                    try {
+                        await window.OfflineManager.downloadTrack(track);
+                        dlBtn.classList.add('active');
+                        dlIcon.classList.remove('spin');
+                        dlIcon.setAttribute('data-lucide', 'check-circle');
+                        dlIcon.style.color = 'var(--primary-color)';
+                        window.uiManager.showNotification('Song downloaded', 'success');
+                    } catch (err) {
+                        dlIcon.classList.remove('spin');
+                        dlIcon.setAttribute('data-lucide', 'download');
+                        window.uiManager.showNotification('Download failed', 'error');
+                    }
+                    if (window.lucide) lucide.createIcons({root: dlBtn});
+                }
+            });
         }
         
         return row;
