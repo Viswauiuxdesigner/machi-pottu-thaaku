@@ -14,7 +14,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -125,13 +125,23 @@ jobs:
 
           npx cap sync android
 
-      - name: Verify Capacitor plugins
+      - name: Verify Capacitor setup
         shell: bash
         run: |
           cd "$PROJECT_DIR"
 
           echo "========================================"
-          echo "CAPACITOR VERSIONS"
+          echo "NODE VERSION"
+          echo "========================================"
+          node -v
+
+          echo "========================================"
+          echo "NPM VERSION"
+          echo "========================================"
+          npm -v
+
+          echo "========================================"
+          echo "CAPACITOR PACKAGES"
           echo "========================================"
 
           npm list \
@@ -141,12 +151,6 @@ jobs:
             @capacitor/filesystem \
             capacitor-music-controls-plugin \
             --depth=0
-
-          echo "========================================"
-          echo "CAPACITOR SYNC"
-          echo "========================================"
-
-          npx cap doctor
 
       - name: Build Android APK
         shell: bash
