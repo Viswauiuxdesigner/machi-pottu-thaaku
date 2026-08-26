@@ -22,26 +22,27 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Find project folder
+      - name: Check project
         shell: bash
         run: |
-          PROJECT_DIR=$(find . -name package.json -not -path './.git/*' -print -quit | xargs dirname)
-          echo "PROJECT_DIR=$PROJECT_DIR"
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found project at: $PROJECT_DIR"
-          ls -la "$PROJECT_DIR"
+          echo "Repository contents:"
+          ls -la
+          echo "Project contents:"
+          ls -la "./Machi Pottu Thaakku"
+          echo "Package file:"
+          ls -la "./Machi Pottu Thaakku/package.json"
 
       - name: Install dependencies
         shell: bash
         run: |
-          cd "$PROJECT_DIR"
+          cd "./Machi Pottu Thaakku"
           npm install
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
       - name: Create Capacitor web directory
         shell: bash
         run: |
-          cd "$PROJECT_DIR"
+          cd "./Machi Pottu Thaakku"
 
           mkdir -p www
 
@@ -65,7 +66,7 @@ jobs:
       - name: Create Capacitor config
         shell: bash
         run: |
-          cd "$PROJECT_DIR"
+          cd "./Machi Pottu Thaakku"
 
           cat > capacitor.config.json <<'EOF'
           {
@@ -82,19 +83,19 @@ jobs:
       - name: Add Android platform
         shell: bash
         run: |
-          cd "$PROJECT_DIR"
+          cd "./Machi Pottu Thaakku"
           npx cap add android
 
       - name: Sync Capacitor
         shell: bash
         run: |
-          cd "$PROJECT_DIR"
+          cd "./Machi Pottu Thaakku"
           npx cap sync android
 
       - name: Build Debug APK
         shell: bash
         run: |
-          cd "$PROJECT_DIR/android"
+          cd "./Machi Pottu Thaakku/android"
           chmod +x gradlew
           ./gradlew assembleDebug
 
@@ -102,4 +103,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: machi-pottu-thaaku-debug-apk
-          path: "**/android/app/build/outputs/apk/debug/app-debug.apk"
+          path: "./Machi Pottu Thaakku/android/app/build/outputs/apk/debug/app-debug.apk"
