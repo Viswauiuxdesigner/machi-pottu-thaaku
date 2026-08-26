@@ -16,29 +16,63 @@ jobs:
         with:
           node-version: 20
 
-      - name: Find project
+      - name: Find project folder
         run: |
-          echo "Searching for package.json..."
+          echo "Searching project..."
           find . -name package.json -not -path './.git/*'
 
       - name: Install dependencies
         run: |
           PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
-          echo "Project directory: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR"
           cd "$PROJECT_DIR"
           npm install
-
-      - name: Install Capacitor
-        run: |
-          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
-          cd "$PROJECT_DIR"
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Initialize Capacitor
+      - name: Create Capacitor web directory
         run: |
           PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
           cd "$PROJECT_DIR"
-          npx cap init "Machi Pottu Thaaku" "com.machipottuthaaku.app" --web-dir=.
+
+          mkdir -p www
+
+          cat > www/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <meta
+              name="viewport"
+              content="width=device-width, initial-scale=1.0"
+            >
+            <title>Machi Pottu Thaaku</title>
+          </head>
+          <body>
+            <script>
+              window.location.replace(
+                "https://starlit-sable-83184f.netlify.app/"
+              );
+            </script>
+          </body>
+          </html>
+          EOF
+
+      - name: Create Capacitor config
+        run: |
+          PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
+          cd "$PROJECT_DIR"
+
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.machipottuthaaku.app",
+            "appName": "Machi Pottu Thaaku",
+            "webDir": "www",
+            "server": {
+              "url": "https://starlit-sable-83184f.netlify.app",
+              "cleartext": false
+            }
+          }
+          EOF
 
       - name: Add Android platform
         run: |
@@ -46,7 +80,7 @@ jobs:
           cd "$PROJECT_DIR"
           npx cap add android
 
-      - name: Sync web project
+      - name: Sync Capacitor
         run: |
           PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
           cd "$PROJECT_DIR"
@@ -58,7 +92,7 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Build APK
+      - name: Build Debug APK
         run: |
           PROJECT_DIR=$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")
           cd "$PROJECT_DIR/android"
