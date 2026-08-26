@@ -1,25 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Machi Pottu Thaaku</title>
-    
+
     <!-- PWA -->
     <link rel="manifest" href="/manifest.webmanifest">
     <meta name="theme-color" content="#080808">
-    
+
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    
+
     <!-- CSS -->
     <link rel="stylesheet" href="/css/styles.css">
-    
+
     <!-- Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
 </head>
+
 <body>
     <div id="app">
         <!-- Sidebar -->
@@ -28,7 +30,7 @@
                 <i data-lucide="headphones" class="brand-icon"></i>
                 <span class="brand-text">Machi Pottu Thaaku</span>
             </div>
-            
+
             <nav class="main-nav">
                 <a href="#" class="nav-item active" data-page="home">
                     <i data-lucide="home"></i> Home
@@ -39,8 +41,11 @@
                 <a href="#" class="nav-item" data-page="favorites">
                     <i data-lucide="heart"></i> Favorites
                 </a>
+                <a href="#" class="nav-item" data-page="downloads">
+                    <i data-lucide="download"></i> Downloads
+                </a>
             </nav>
-            
+
             <div class="bottom-nav">
                 <a href="#" class="nav-item" data-page="storage">
                     <i data-lucide="hard-drive"></i> Storage
@@ -53,7 +58,9 @@
             <header class="top-header">
                 <div class="greeting" id="header-greeting">Good evening, Machi 👋</div>
                 <div class="header-actions">
-                    <button id="btn-refresh-library" class="icon-btn" title="Refresh Music Library" aria-label="Refresh Library" style="margin-right: 15px; color: var(--text-secondary); background: none; border: none; cursor: pointer;">
+                    <button id="btn-refresh-library" class="icon-btn" title="Refresh Music Library"
+                        aria-label="Refresh Library"
+                        style="margin-right: 15px; color: var(--text-secondary); background: none; border: none; cursor: pointer;">
                         <i data-lucide="refresh-cw"></i>
                     </button>
                     <div id="network-status" class="network-status online">
@@ -70,7 +77,7 @@
                         <p>Discover, listen and save your favorite songs.</p>
                         <button class="btn btn-primary" id="btn-explore">Explore Music</button>
                     </section>
-                    
+
                     <section class="collections-section">
                         <h2>Library Collections</h2>
                         <div class="grid-container" id="collections-grid">
@@ -80,12 +87,12 @@
                 </div>
 
                 <div id="page-search" class="page">
-                    
+
                     <div class="search-container">
                         <i data-lucide="search" class="search-icon"></i>
                         <input type="text" id="search-input" placeholder="Search songs, artists..." autocomplete="off">
                     </div>
-                    
+
                     <div class="search-chips" id="search-chips">
                         <button class="search-chip">Tamil</button>
                         <button class="search-chip">தமிழ்</button>
@@ -93,7 +100,7 @@
                         <button class="search-chip">Tamil Folk</button>
                         <button class="search-chip">Tamil Indie</button>
                     </div>
-                    
+
                     <div id="search-filters" class="search-filters" style="display: none;">
                         <button class="filter-btn active">All</button>
                         <button class="filter-btn">Tracks</button>
@@ -105,24 +112,38 @@
                             <p>Search for Tamil songs, artists...</p>
                         </div>
                     </div>
-                    
-                    <div id="load-more-container" style="display: none; text-align: center; margin-top: 20px; padding-bottom: 20px;">
-                        <button id="btn-load-more" class="btn btn-primary" style="width: 100%; max-width: 300px; padding: 12px; border-radius: 24px;">Load More</button>
+
+                    <div id="load-more-container"
+                        style="display: none; text-align: center; margin-top: 20px; padding-bottom: 20px;">
+                        <button id="btn-load-more" class="btn btn-primary"
+                            style="width: 100%; max-width: 300px; padding: 12px; border-radius: 24px;">Load
+                            More</button>
                     </div>
                 </div>
-                
+
                 <div id="page-favorites" class="page">
                     <div class="page-header">
                         <h1>Favorites</h1>
                         <p>Your liked tracks.</p>
                     </div>
-                    
+
                     <div id="favorites-results" class="track-list">
                         <!-- Loaded via JS -->
                     </div>
                 </div>
+
+                <div id="page-downloads" class="page">
+                    <div class="page-header">
+                        <h1>Downloads</h1>
+                        <p>Listen offline without internet.</p>
+                    </div>
+
+                    <div id="downloads-results" class="track-list">
+                        <!-- Loaded via JS -->
+                    </div>
+                </div>
             </div>
-            
+
             <div id="notification-container"></div>
         </main>
 
@@ -137,14 +158,17 @@
                     <div class="player-artist" id="player-artist">-</div>
                 </div>
             </div>
-            
+
             <div class="player-controls-container">
                 <div class="player-controls">
-                    <button class="control-btn" id="btn-prev" aria-label="Previous"><i data-lucide="skip-back"></i></button>
-                    <button class="control-btn play-btn" id="btn-play-pause" aria-label="Play"><i data-lucide="play"></i></button>
-                    <button class="control-btn" id="btn-next" aria-label="Next"><i data-lucide="skip-forward"></i></button>
+                    <button class="control-btn" id="btn-prev" aria-label="Previous"><i
+                            data-lucide="skip-back"></i></button>
+                    <button class="control-btn play-btn" id="btn-play-pause" aria-label="Play"><i
+                            data-lucide="play"></i></button>
+                    <button class="control-btn" id="btn-next" aria-label="Next"><i
+                            data-lucide="skip-forward"></i></button>
                 </div>
-                
+
                 <div class="player-progress">
                     <span class="time-current" id="time-current">0:00</span>
                     <div class="progress-bar-container" id="progress-container">
@@ -153,7 +177,7 @@
                     <span class="time-total" id="time-total">0:00</span>
                 </div>
             </div>
-            
+
             <div class="player-volume">
                 <button class="control-btn" id="btn-mute" aria-label="Mute"><i data-lucide="volume-2"></i></button>
                 <div class="volume-slider-container" id="volume-container">
@@ -161,15 +185,17 @@
                 </div>
             </div>
         </footer>
-        
+
         <!-- Native HTML5 Audio Element -->
         <audio id="main-audio" preload="metadata"></audio>
     </div>
 
     <!-- Scripts -->
     <script src="/js/storage.js"></script>
+    <script src="/js/offline-manager.js"></script>
     <script src="/js/player.js"></script>
     <script src="/js/ui.js"></script>
     <script src="/js/app.js"></script>
 </body>
+
 </html>
