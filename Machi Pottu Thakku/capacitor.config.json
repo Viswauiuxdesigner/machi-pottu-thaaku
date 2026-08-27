@@ -1,0 +1,6 @@
+{
+  "appId": "com.machipottuthaaku.app",
+  "appName": "Machi Pottu Thaaku",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
