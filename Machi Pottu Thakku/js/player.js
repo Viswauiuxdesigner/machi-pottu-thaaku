@@ -59,7 +59,7 @@ class AudioPlayer {
     setupAudioEvents() {
         this.audio.addEventListener('play', () => this.syncUIState(true));
         this.audio.addEventListener('pause', () => this.syncUIState(false));
-        this.audio.addEventListener('ended', () => this.playNext());
+        this.audio.addEventListener('ended', () => this.playNext(true, this.playRequestId));
         
         this.audio.addEventListener('timeupdate', () => {
             this.updateProgress(this.audio.currentTime, this.audio.duration);
@@ -83,7 +83,15 @@ class AudioPlayer {
                 else this.syncUIState(false);
             });
             NativeAudio.addListener('onAudioEnd', () => {
+                this.playNext(true, this.playRequestId);
+            });
+            NativeAudio.addListener('onNext', () => {
+                console.log("[NATIVE AUDIO] Lock-screen Next clicked");
                 this.playNext();
+            });
+            NativeAudio.addListener('onPrevious', () => {
+                console.log("[NATIVE AUDIO] Lock-screen Previous clicked");
+                this.playPrev();
             });
             NativeAudio.addListener('onAudioReady', () => {
                 this.nativeReady = true;
@@ -129,15 +137,6 @@ class AudioPlayer {
         });
         
         if (window.lucide) lucide.createIcons();
-        
-        // Sync native controls
-        if (Capacitor.isNativePlatform()) {
-            if (isPlaying) {
-                NativeAudio.play({ audioId: 'main' }).catch(e => console.log(e));
-            } else {
-                NativeAudio.pause({ audioId: 'main' }).catch(e => console.log(e));
-            }
-        }
     }
 
     async playTrack(track, queueList = [], index = 0) {
@@ -303,31 +302,47 @@ class AudioPlayer {
         }
     }
 
-    playNext(autoSkip = false) {
+    playNext(autoSkip = false, reqId = null) {
+        if (autoSkip && reqId !== null && reqId !== this.playRequestId) {
+            console.log("[PLAYER] Ignoring stale onAudioEnd event for old playRequest");
+            return;
+        }
+
         if (this.queueIndex >= 0 && this.queueIndex < this.queue.length - 1) {
             this.queueIndex++;
             this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
         } else {
             // End of queue
             if (!autoSkip) {
-                this.audio.pause();
-                this.audio.currentTime = 0;
-            } else {
-                this.syncUIState(false);
+                if (!Capacitor.isNativePlatform() && this.audio) {
+                    this.audio.pause();
+                    this.audio.currentTime = 0;
+                }
             }
+            this.syncUIState(false);
         }
     }
 
-    playPrev() {
+    async playPrev() {
         if (Capacitor.isNativePlatform()) {
-            if (this.queueIndex > 0) {
+            let currentSec = 0;
+            try {
+                if (this.nativeInitialized) {
+                    const { currentTime } = await NativeAudio.getCurrentTime({ audioId: 'main' });
+                    currentSec = currentTime;
+                }
+            } catch(e) {}
+            
+            if (currentSec > 5) {
+                await NativeAudio.seek({ audioId: 'main', timeInSeconds: 0 });
+            } else if (this.queueIndex > 0) {
                 this.queueIndex--;
                 this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
             }
         } else {
             if (!this.audio) return;
             
-            if (this.audio.currentTime > 3) {
+            if (this.audio.currentTime > 5) {
                 this.audio.currentTime = 0;
                 this.audio.play();
             } else if (this.queueIndex > 0) {

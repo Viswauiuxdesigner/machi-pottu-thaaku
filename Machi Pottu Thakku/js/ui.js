@@ -208,6 +208,10 @@ class UIManager {
                         dlBtn.classList.add('active');
                         dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--primary-color)"></i>`;
                         window.uiManager.showNotification('Song downloaded', 'success');
+                        
+                        if (document.getElementById('page-downloads') && document.getElementById('page-downloads').classList.contains('active') && window.app && window.app.loadDownloads) {
+                            window.app.loadDownloads();
+                        }
                     } catch (err) {
                         dlBtn.innerHTML = `<i data-lucide="download"></i>`;
                         window.uiManager.showNotification('Download failed: ' + err.message, 'error');
