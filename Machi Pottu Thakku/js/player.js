@@ -4,7 +4,7 @@
  */
 
 import { Capacitor } from '@capacitor/core';
-import { NativeAudio } from '@mediagrid/capacitor-native-audio';
+import { AudioPlayer as NativeAudio } from '@mediagrid/capacitor-native-audio';
 
 class AudioPlayer {
     constructor() {
