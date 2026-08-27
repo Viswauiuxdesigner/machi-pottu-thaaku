@@ -3,15 +3,18 @@
  * Handles downloading, storing, and retrieving audio files and metadata for offline playback.
  */
 
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Capacitor } from '@capacitor/core';
+
 class OfflineManagerClass {
     constructor() {
         this.downloadsKey = 'mpt_offline_downloads';
         // Object mapping track.id to track metadata + localPath
         this.offlineTracks = this.loadMetadata();
         
-        // Ensure Capacitor and Filesystem are available
-        this.Filesystem = window.Capacitor ? window.Capacitor.Plugins.Filesystem : null;
-        this.Directory = window.Capacitor ? window.Capacitor.Plugins.Directory : null;
+        // Use imported modules directly
+        this.Filesystem = Filesystem;
+        this.Directory = Directory;
     }
 
     loadMetadata() {
@@ -64,13 +67,13 @@ class OfflineManagerClass {
         if (!this.offlineTracks[trackId]) return null;
         const path = this.offlineTracks[trackId].localPath;
         
-        if (this.Filesystem && this.Directory && window.Capacitor) {
+        if (this.Filesystem && this.Directory) {
             try {
                 const uriResult = await this.Filesystem.getUri({
                     path: path,
                     directory: this.Directory.Data
                 });
-                return window.Capacitor.convertFileSrc(uriResult.uri);
+                return Capacitor.convertFileSrc(uriResult.uri);
             } catch (e) {
                 console.error("Failed to get local URI", e);
                 return null;
@@ -100,7 +103,7 @@ class OfflineManagerClass {
         // 1. Fetch Presigned URL (we reuse the existing Netlify API for this)
         let downloadUrl;
         try {
-            const response = await fetch(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
+            const response = await fetch(window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`));
             if (!response.ok) throw new Error("Failed to get signed URL");
             const data = await response.json();
             if (data.error) throw new Error(data.error);

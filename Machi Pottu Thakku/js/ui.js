@@ -79,7 +79,7 @@ class UIManager {
         }
 
         try {
-            const response = await fetch(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
+            const response = await fetch(window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`));
             if (!response.ok) return;
             const data = await response.json();
             if (!data.url) return;
@@ -168,17 +168,14 @@ class UIManager {
             this.loadTrackMetadata(track, durationSpan);
         }
         
-        // Download action
         const dlBtn = row.querySelector('.action-download');
-        const dlIcon = dlBtn.querySelector('i');
         
         // Initial state
         if (window.OfflineManager) {
             window.OfflineManager.isDownloaded(track.id).then(isDl => {
                 if (isDl) {
                     dlBtn.classList.add('active');
-                    dlIcon.setAttribute('data-lucide', 'check-circle');
-                    dlIcon.style.color = 'var(--primary-color)';
+                    dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--primary-color)"></i>`;
                     if (window.lucide) lucide.createIcons({root: dlBtn});
                 }
             });
@@ -193,8 +190,7 @@ class UIManager {
                     if (confirm('Remove from downloads?')) {
                         await window.OfflineManager.deleteTrack(track.id);
                         dlBtn.classList.remove('active');
-                        dlIcon.setAttribute('data-lucide', 'download');
-                        dlIcon.style.color = '';
+                        dlBtn.innerHTML = `<i data-lucide="download"></i>`;
                         if (window.lucide) lucide.createIcons({root: dlBtn});
                         
                         // If we are on the downloads page, refresh
@@ -204,21 +200,17 @@ class UIManager {
                     }
                 } else {
                     // Download
-                    dlIcon.setAttribute('data-lucide', 'loader');
-                    dlIcon.classList.add('spin');
+                    dlBtn.innerHTML = `<i data-lucide="loader" class="spin"></i>`;
                     if (window.lucide) lucide.createIcons({root: dlBtn});
                     
                     try {
                         await window.OfflineManager.downloadTrack(track);
                         dlBtn.classList.add('active');
-                        dlIcon.classList.remove('spin');
-                        dlIcon.setAttribute('data-lucide', 'check-circle');
-                        dlIcon.style.color = 'var(--primary-color)';
+                        dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--primary-color)"></i>`;
                         window.uiManager.showNotification('Song downloaded', 'success');
                     } catch (err) {
-                        dlIcon.classList.remove('spin');
-                        dlIcon.setAttribute('data-lucide', 'download');
-                        window.uiManager.showNotification('Download failed', 'error');
+                        dlBtn.innerHTML = `<i data-lucide="download"></i>`;
+                        window.uiManager.showNotification('Download failed: ' + err.message, 'error');
                     }
                     if (window.lucide) lucide.createIcons({root: dlBtn});
                 }

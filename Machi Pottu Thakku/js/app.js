@@ -3,6 +3,15 @@
  * Main application initialization and routing
  */
 
+import { Capacitor } from '@capacitor/core';
+
+window.getApiUrl = function(path) {
+    if (Capacitor.isNativePlatform()) {
+        return `https://starlit-sable-83184f.netlify.app${path}`;
+    }
+    return path;
+};
+
 class App {
     constructor() {
         console.log("[RUNTIME] Local Music Library version loaded");
@@ -108,7 +117,7 @@ class App {
                 }
             }
 
-            const response = await fetch('/.netlify/functions/music-library');
+            const response = await fetch(window.getApiUrl('/.netlify/functions/music-library'));
             if (!response.ok) throw new Error('Failed to load music library from serverless function');
             const data = await response.json();
             

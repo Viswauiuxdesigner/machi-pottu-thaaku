@@ -3,6 +3,9 @@
  * Handles audio playback, queue, and UI synchronization using native HTML5 Audio
  */
 
+import { Capacitor } from '@capacitor/core';
+import { NativeAudio } from '@mediagrid/capacitor-native-audio';
+
 class AudioPlayer {
     constructor() {
         this.currentTrack = null;
@@ -66,31 +69,33 @@ class AudioPlayer {
             this.syncUIState(false);
         });
         
-        // Setup Music Controls Listener if running natively
-        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.MusicControls) {
-            const MusicControls = window.Capacitor.Plugins.MusicControls;
-            MusicControls.addListener('controlsNotification', (event) => {
-                if (!event) return;
-                const action = event.message;
-                
-                switch (action) {
-                    case 'music-controls-next':
-                        this.playNext();
-                        break;
-                    case 'music-controls-previous':
-                        this.playPrev();
-                        break;
-                    case 'music-controls-pause':
-                        this.togglePlay();
-                        break;
-                    case 'music-controls-play':
-                        this.togglePlay();
-                        break;
-                    case 'music-controls-destroy':
-                        this.togglePlay();
-                        break;
-                }
+        // Setup NativeAudio Listener if running natively
+        if (Capacitor.isNativePlatform()) {
+            NativeAudio.addListener('onPlaybackStatusChange', (result) => {
+                if (result.status === 'playing') this.syncUIState(true);
+                else this.syncUIState(false);
             });
+            NativeAudio.addListener('onAudioEnd', () => {
+                this.playNext();
+            });
+            
+            // Periodically sync progress from native audio
+            setInterval(async () => {
+                if (this.currentTrack && Capacitor.isNativePlatform()) {
+                    try {
+                        const { currentTime } = await NativeAudio.getCurrentTime({ audioId: 'main' });
+                        // To get duration we might also need getDuration, but let's keep track duration from queue
+                        // or just try to get it.
+                        let duration = 0;
+                        try {
+                            const dur = await NativeAudio.getDuration({ audioId: 'main' });
+                            duration = dur.duration;
+                        } catch(e) {}
+                        
+                        this.updateProgress(currentTime, duration);
+                    } catch(e) {}
+                }
+            }, 1000);
         }
     }
 
@@ -118,10 +123,12 @@ class AudioPlayer {
         if (window.lucide) lucide.createIcons();
         
         // Sync native controls
-        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.MusicControls) {
-            window.Capacitor.Plugins.MusicControls.updateIsPlaying({
-                isPlaying: isPlaying
-            }).catch(e => console.log(e));
+        if (Capacitor.isNativePlatform()) {
+            if (isPlaying) {
+                NativeAudio.play({ audioId: 'main' }).catch(e => console.log(e));
+            } else {
+                NativeAudio.pause({ audioId: 'main' }).catch(e => console.log(e));
+            }
         }
     }
 
@@ -160,8 +167,21 @@ class AudioPlayer {
                 console.log("[PLAYBACK] Playing local downloaded track");
                 const localUrl = await window.OfflineManager.getLocalUrl(track.id);
                 if (localUrl) {
-                    this.audio.src = localUrl;
-                    this.audio.play().catch(err => console.error("Local play prevented:", err));
+                    if (Capacitor.isNativePlatform()) {
+                        await NativeAudio.create({
+                            audioId: 'main',
+                            audioSource: localUrl,
+                            friendlyTitle: track.title,
+                            artistName: track.artist,
+                            artworkSource: track.thumbnail || '',
+                            useForNotification: true
+                        });
+                        await NativeAudio.play({ audioId: 'main' });
+                        this.syncUIState(true);
+                    } else {
+                        this.audio.src = localUrl;
+                        this.audio.play().catch(err => console.error("Local play prevented:", err));
+                    }
                     return;
                 }
             }
@@ -180,7 +200,7 @@ class AudioPlayer {
             }
 
             console.log("[FILEBASE PLAYBACK] Requesting signed URL");
-            const requestUrl = `/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`;
+            const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
             console.log(`[FILEBASE PLAYBACK] Request URL: ${requestUrl}`);
             
             const response = await fetch(requestUrl);
@@ -194,12 +214,23 @@ class AudioPlayer {
             
             console.log("[FILEBASE PLAYBACK] Signed URL generated");
             
-            this.audio.src = data.url;
-            console.log("[RUNTIME TRACE] audio.src immediately before play():", "Presigned URL (hidden)");
-            
-            this.audio.play().catch(err => {
-                console.error("Autoplay prevented:", err);
-            });
+            if (Capacitor.isNativePlatform()) {
+                await NativeAudio.create({
+                    audioId: 'main',
+                    audioSource: data.url,
+                    friendlyTitle: track.title,
+                    artistName: track.artist,
+                    artworkSource: track.thumbnail || '',
+                    useForNotification: true
+                });
+                await NativeAudio.play({ audioId: 'main' });
+                this.syncUIState(true);
+            } else {
+                this.audio.src = data.url;
+                this.audio.play().catch(err => {
+                    console.error("Autoplay prevented:", err);
+                });
+            }
         } catch (error) {
             console.error("[FILEBASE PLAYBACK] Error fetching presigned URL:", error);
             window.uiManager.showNotification("Playback failed: " + error.message, "error");
@@ -211,12 +242,25 @@ class AudioPlayer {
     }
 
     togglePlay() {
-        if (!this.currentTrack || !this.audio.src) return;
+        if (!this.currentTrack) return;
         
-        if (this.audio.paused) {
-            this.audio.play();
+        if (Capacitor.isNativePlatform()) {
+            NativeAudio.isPlaying({ audioId: 'main' }).then(({ isPlaying }) => {
+                if (isPlaying) {
+                    NativeAudio.pause({ audioId: 'main' });
+                    this.syncUIState(false);
+                } else {
+                    NativeAudio.play({ audioId: 'main' });
+                    this.syncUIState(true);
+                }
+            }).catch(e => console.error(e));
         } else {
-            this.audio.pause();
+            if (!this.audio.src) return;
+            if (this.audio.paused) {
+                this.audio.play();
+            } else {
+                this.audio.pause();
+            }
         }
     }
 
@@ -236,14 +280,21 @@ class AudioPlayer {
     }
 
     playPrev() {
-        if (!this.audio) return;
-        
-        if (this.audio.currentTime > 3) {
-            this.audio.currentTime = 0;
-            this.audio.play();
-        } else if (this.queueIndex > 0) {
-            this.queueIndex--;
-            this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
+        if (Capacitor.isNativePlatform()) {
+            if (this.queueIndex > 0) {
+                this.queueIndex--;
+                this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
+            }
+        } else {
+            if (!this.audio) return;
+            
+            if (this.audio.currentTime > 3) {
+                this.audio.currentTime = 0;
+                this.audio.play();
+            } else if (this.queueIndex > 0) {
+                this.queueIndex--;
+                this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
+            }
         }
     }
 
@@ -328,21 +379,7 @@ class AudioPlayer {
             navigator.mediaSession.setActionHandler('nexttrack', () => this.playNext());
         }
         
-        // Set Native Foreground Music Controls if available (Capacitor)
-        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.MusicControls) {
-            const MusicControls = window.Capacitor.Plugins.MusicControls;
-            MusicControls.create({
-                track: track.title,
-                artist: track.artist,
-                cover: track.thumbnail || '',
-                isPlaying: true,
-                dismissable: false,
-                hasPrev: true,
-                hasNext: true,
-                hasClose: true,
-                ticker: `Playing ${track.title}`
-            }).catch(e => console.log('MusicControls create error', e));
-        }
+        // NativeAudio handles foreground notification automatically via playUrl on Android
         
         // Reset progress visually
         document.getElementById('progress-bar').style.width = `0%`;
