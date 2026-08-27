@@ -10,403 +10,461 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # =========================================================
-      # CHECKOUT
-      # =========================================================
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # =========================================================
-      # NODE
-      # =========================================================
-      - name: Setup Node.js 22
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      # =========================================================
-      # JAVA
-      # =========================================================
-      - name: Setup Java 21
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
+          distribution: "zulu"
           java-version: "21"
 
-      # =========================================================
-      # FIND PROJECT
-      # =========================================================
-      - name: Find project folder
-        shell: bash
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "FINDING PROJECT"
-          echo "========================================"
-
-          PROJECT_DIR=""
-
-          while IFS= read -r -d '' PACKAGE_FILE; do
-            DIR="$(dirname "$PACKAGE_FILE")"
-
-            if [ -f "$DIR/index.html" ]; then
-              PROJECT_DIR="$DIR"
-              break
-            fi
-          done < <(
-            find . \
-              -type f \
-              -name "package.json" \
-              -not -path "./.git/*" \
-              -print0
-          )
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Project folder not found."
-            exit 1
-          fi
-
-          echo "Project folder:"
-          echo "$PROJECT_DIR"
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      # =========================================================
-      # INSTALL
-      # =========================================================
       - name: Install dependencies
-        shell: bash
-        run: |
-          set -e
+        run: npm install
 
-          cd "$PROJECT_DIR"
-
-          echo "========================================"
-          echo "NPM INSTALL"
-          echo "========================================"
-
-          npm install
-
-          echo ""
-          echo "Installed packages:"
-          npm list \
-            @capacitor/core \
-            @capacitor/cli \
-            @capacitor/android \
-            @capacitor/filesystem \
-            @mediagrid/capacitor-native-audio \
-            vite \
-            --depth=0
-
-      # =========================================================
-      # WEB BUILD
-      # =========================================================
       - name: Build Web App
-        shell: bash
+        run: npm run build
+
+      - name: Capacitor Add Android
         run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "========================================"
-          echo "VITE BUILD"
-          echo "========================================"
-
-          npm run build
-
-          if [ ! -f "dist/index.html" ]; then
-            echo "ERROR: dist/index.html was not generated."
-            exit 1
-          fi
-
-          echo "VITE_BUILD=PASS" >> "$GITHUB_ENV"
-
-      # =========================================================
-      # CAPACITOR CONFIG
-      # =========================================================
-      - name: Verify Capacitor configuration
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "========================================"
-          echo "CAPACITOR CONFIGURATION"
-          echo "========================================"
-
-          if [ ! -f "capacitor.config.json" ]; then
-            echo "ERROR: capacitor.config.json is missing."
-            exit 1
-          fi
-
-          cat capacitor.config.json
-
-          if ! grep -q '"webDir"[[:space:]]*:[[:space:]]*"dist"' capacitor.config.json; then
-            echo "ERROR: Capacitor webDir must be dist."
-            exit 1
-          fi
-
-          echo "Capacitor configuration verified."
-
-      # =========================================================
-      # ANDROID PLATFORM
-      # =========================================================
-      - name: Add Android platform
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "========================================"
-          echo "ANDROID PLATFORM"
-          echo "========================================"
-
           if [ ! -d "android" ]; then
-            echo "Android platform not found."
-            echo "Creating Android platform..."
-
             npx cap add android
           else
-            echo "Android platform already exists."
+            echo "Android project already exists."
           fi
 
-      # =========================================================
-      # CAPACITOR SYNC
-      # =========================================================
-      - name: Sync Capacitor
-        shell: bash
+      - name: Capacitor Sync
+        run: npx cap sync android
+
+      # ============================================================
+      # VERIFY PLUGIN + MANIFEST + PATCH NATIVE NEXT/PREVIOUS
+      # ============================================================
+      - name: Configure Android Media Service and Native Lock Controls
+        shell: python
         run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "========================================"
-          echo "CAPACITOR SYNC"
-          echo "========================================"
-
-          npx cap sync android
-
-          if [ ! -f "android/app/src/main/AndroidManifest.xml" ]; then
-            echo "ERROR: AndroidManifest.xml missing."
-            exit 1
-          fi
-
-          echo "CAPACITOR_SYNC=PASS" >> "$GITHUB_ENV"
-
-      # =========================================================
-      # NATIVE AUDIO VERSION
-      # =========================================================
-      - name: Verify NativeAudio plugin
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "========================================"
-          echo "NATIVE AUDIO VERSION"
-          echo "========================================"
-
-          PLUGIN_PACKAGE="node_modules/@mediagrid/capacitor-native-audio/package.json"
-
-          if [ ! -f "$PLUGIN_PACKAGE" ]; then
-            echo "ERROR: NativeAudio plugin not found."
-            exit 1
-          fi
-
-          NATIVE_AUDIO_VERSION=$(node -p "require('./$PLUGIN_PACKAGE').version")
-
-          echo "NativeAudio version: $NATIVE_AUDIO_VERSION"
-
-          echo "NATIVE_AUDIO_VERSION=$NATIVE_AUDIO_VERSION" >> "$GITHUB_ENV"
-
-      # =========================================================
-      # NATIVE AUDIO SOURCE PATCH
-      # =========================================================
-      - name: Patch NativeAudio Next Previous bridge
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "========================================"
-          echo "NATIVE AUDIO NEXT/PREVIOUS PATCH"
-          echo "========================================"
-
-          python3 <<'PY'
-          from pathlib import Path
+          import json
+          import os
           import re
           import sys
 
-          base = Path(
-              "node_modules/@mediagrid/capacitor-native-audio/"
+          PLUGIN_ROOT = "node_modules/@mediagrid/capacitor-native-audio"
+          JAVA_ROOT = os.path.join(
+              PLUGIN_ROOT,
               "android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio"
           )
 
-          service_path = base / "AudioPlayerService.java"
-          source_path = base / "AudioSource.java"
-          plugin_path = base / "AudioPlayerPlugin.java"
+          PLAYER_SERVICE = os.path.join(
+              JAVA_ROOT,
+              "AudioPlayerService.java"
+          )
 
-          required = [service_path, source_path, plugin_path]
+          AUDIO_SOURCE = os.path.join(
+              JAVA_ROOT,
+              "AudioSource.java"
+          )
 
-          for path in required:
-              if not path.exists():
-                  print(f"ERROR: Required source not found: {path}")
-                  sys.exit(1)
+          AUDIO_PLUGIN = os.path.join(
+              JAVA_ROOT,
+              "AudioPlayerPlugin.java"
+          )
 
-          service = service_path.read_text(encoding="utf-8")
-          source = source_path.read_text(encoding="utf-8")
-          plugin = plugin_path.read_text(encoding="utf-8")
+          def fail(message):
+              print("")
+              print("============================================================")
+              print("ERROR")
+              print("============================================================")
+              print(message)
+              print("============================================================")
+              sys.exit(1)
 
-          print("Actual NativeAudio source files located.")
+          def read_file(path):
+              if not os.path.exists(path):
+                  fail(f"Required file does not exist: {path}")
 
-          # -----------------------------------------------------
-          # AudioSource callback fields
-          # -----------------------------------------------------
-          if "onNextCallbackId" not in source:
-              marker = "private String"
+              with open(path, "r", encoding="utf-8") as f:
+                  return f.read()
 
-              if marker in source:
-                  source = source.replace(
-                      marker,
-                      "private String onNextCallbackId;\n"
-                      "    private String onPrevCallbackId;\n\n"
-                      + marker,
-                      1
-                  )
-              else:
-                  # Fallback: insert after class declaration
-                  class_match = re.search(
-                      r"(public\s+class\s+AudioSource[^{]*\{)",
-                      source
-                  )
+          def write_file(path, content):
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content)
 
-                  if not class_match:
-                      print("ERROR: Could not locate AudioSource class.")
-                      sys.exit(1)
+          def class_body_range(source, class_name):
+              """
+              Locate the actual class declaration and return the opening
+              and closing brace positions for that class.
+              This avoids blindly appending Java methods outside the class.
+              """
 
-                  insert_at = class_match.end()
-
-                  source = (
-                      source[:insert_at]
-                      + "\n"
-                      + "    private String onNextCallbackId;\n"
-                      + "    private String onPrevCallbackId;\n"
-                      + source[insert_at:]
-                  )
-
-          # -----------------------------------------------------
-          # AudioSource callback methods
-          # -----------------------------------------------------
-          if "void setOnNext(" not in source:
-              source += r'''
-
-          // Native lock-screen NEXT callback
-          public void setOnNext(String callbackId) {
-              this.onNextCallbackId = callbackId;
-          }
-
-          // Native lock-screen PREVIOUS callback
-          public void setOnPrev(String callbackId) {
-              this.onPrevCallbackId = callbackId;
-          }
-
-          // Fire NEXT callback
-          public void fireNext() {
-              if (onNextCallbackId == null) {
-                  return;
-              }
-
-              try {
-                  pluginOwner.getBridge()
-                      .getSavedCall(onNextCallbackId)
-                      .resolve();
-              } catch (Exception ignored) {
-              }
-          }
-
-          // Fire PREVIOUS callback
-          public void firePrevious() {
-              if (onPrevCallbackId == null) {
-                  return;
-              }
-
-              try {
-                  pluginOwner.getBridge()
-                      .getSavedCall(onPrevCallbackId)
-                      .resolve();
-              } catch (Exception ignored) {
-              }
-          }
-          '''
-
-          source_path.write_text(source, encoding="utf-8")
-
-          # -----------------------------------------------------
-          # Plugin methods
-          # -----------------------------------------------------
-          if "void onNext(" not in plugin:
-              plugin += r'''
-
-          @PluginMethod(returnType = PluginMethod.RETURN_CALLBACK)
-          public void onNext(PluginCall call) {
-              AudioSource source = getAudioSources()
-                  .forNotification();
-
-              if (source != null) {
-                  source.setOnNext(call.getCallbackId());
-              }
-          }
-
-          @PluginMethod(returnType = PluginMethod.RETURN_CALLBACK)
-          public void onPrevious(PluginCall call) {
-              AudioSource source = getAudioSources()
-                  .forNotification();
-
-              if (source != null) {
-                  source.setOnPrev(call.getCallbackId());
-              }
-          }
-          '''
-
-          plugin_path.write_text(plugin, encoding="utf-8")
-
-          # -----------------------------------------------------
-          # MediaSession ForwardingPlayer
-          # -----------------------------------------------------
-          if "ForwardingPlayer" not in service:
-              import_marker = "import"
-
-              first_import = service.find(import_marker)
-
-              if first_import >= 0:
-                  service = (
-                      service[:first_import]
-                      + "import androidx.media3.common.ForwardingPlayer;\n"
-                      + service[first_import:]
-                  )
-              else:
-                  print("ERROR: Could not locate imports in AudioPlayerService.")
-                  sys.exit(1)
-
-              player_pattern = re.compile(
-                  r"MediaSession\.Builder\(\s*this\s*,\s*player\s*\)"
+              pattern = re.compile(
+                  r"\bclass\s+" + re.escape(class_name) + r"\b[^{]*\{"
               )
 
-              if not player_pattern.search(service):
-                  print(
-                      "ERROR: Could not locate MediaSession.Builder "
-                      "with the actual player."
+              match = pattern.search(source)
+
+              if not match:
+                  fail(
+                      f"Could not locate Java class '{class_name}' "
+                      "in the installed plugin source."
                   )
-                  sys.exit(1)
 
-              forwarding = r'''
+              opening = source.find("{", match.start())
+
+              depth = 0
+              in_string = False
+              in_char = False
+              in_line_comment = False
+              in_block_comment = False
+              escape = False
+
+              i = opening
+
+              while i < len(source):
+                  c = source[i]
+                  n = source[i + 1] if i + 1 < len(source) else ""
+
+                  if in_line_comment:
+                      if c == "\n":
+                          in_line_comment = False
+                      i += 1
+                      continue
+
+                  if in_block_comment:
+                      if c == "*" and n == "/":
+                          in_block_comment = False
+                          i += 2
+                          continue
+                      i += 1
+                      continue
+
+                  if in_string:
+                      if escape:
+                          escape = False
+                      elif c == "\\":
+                          escape = True
+                      elif c == '"':
+                          in_string = False
+                      i += 1
+                      continue
+
+                  if in_char:
+                      if escape:
+                          escape = False
+                      elif c == "\\":
+                          escape = True
+                      elif c == "'":
+                          in_char = False
+                      i += 1
+                      continue
+
+                  if c == "/" and n == "/":
+                      in_line_comment = True
+                      i += 2
+                      continue
+
+                  if c == "/" and n == "*":
+                      in_block_comment = True
+                      i += 2
+                      continue
+
+                  if c == '"':
+                      in_string = True
+                      i += 1
+                      continue
+
+                  if c == "'":
+                      in_char = True
+                      i += 1
+                      continue
+
+                  if c == "{":
+                      depth += 1
+
+                  elif c == "}":
+                      depth -= 1
+
+                      if depth == 0:
+                          return opening, i
+
+                  i += 1
+
+              fail(
+                  f"Could not find balanced closing brace for class '{class_name}'."
+              )
+
+          def ensure_inside_class(source, class_name, signature):
+              start, end = class_body_range(source, class_name)
+              body = source[start:end + 1]
+
+              if signature not in body:
+                  return False
+
+              return True
+
+          def class_has_method(source, class_name, method_name):
+              start, end = class_body_range(source, class_name)
+              body = source[start:end + 1]
+
+              return re.search(
+                  r"\b" + re.escape(method_name) +
+                  r"\s*\(",
+                  body
+              ) is not None
+
+          # ------------------------------------------------------------
+          # 1. Verify package + plugin version
+          # ------------------------------------------------------------
+
+          package = json.loads(
+              read_file("package.json")
+          )
+
+          dependencies = package.get("dependencies", {})
+          plugin_version = dependencies.get(
+              "@mediagrid/capacitor-native-audio"
+          )
+
+          if not plugin_version:
+              fail(
+                  "@mediagrid/capacitor-native-audio is missing from package.json."
+              )
+
+          print(f"NativeAudio package: {plugin_version}")
+
+          if not os.path.isdir(PLUGIN_ROOT):
+              fail(
+                  "Installed @mediagrid/capacitor-native-audio package "
+                  "could not be found."
+              )
+
+          # ------------------------------------------------------------
+          # 2. Read actual Java source BEFORE modifying anything
+          # ------------------------------------------------------------
+
+          service_src = read_file(PLAYER_SERVICE)
+          source_src = read_file(AUDIO_SOURCE)
+          plugin_src = read_file(AUDIO_PLUGIN)
+
+          print("")
+          print("============================================================")
+          print("INSPECTING ACTUAL NATIVE AUDIO SOURCE")
+          print("============================================================")
+
+          print(f"AudioPlayerService.java: {len(service_src)} bytes")
+          print(f"AudioSource.java: {len(source_src)} bytes")
+          print(f"AudioPlayerPlugin.java: {len(plugin_src)} bytes")
+
+          # ------------------------------------------------------------
+          # 3. Basic source safety checks
+          # ------------------------------------------------------------
+
+          for path, src in [
+              (PLAYER_SERVICE, service_src),
+              (AUDIO_SOURCE, source_src),
+              (AUDIO_PLUGIN, plugin_src),
+          ]:
+              stripped = src.lstrip()
+
+              if not stripped.startswith("package "):
+                  fail(
+                      f"Java source structure invalid before patch: {path}"
+                  )
+
+          # ------------------------------------------------------------
+          # 4. Inspect existing MediaSession construction
+          # ------------------------------------------------------------
+
+          media_session_pattern = re.compile(
+              r"new\s+MediaSession\.Builder\s*\(\s*this\s*,\s*player\s*\)"
+          )
+
+          media_session_match = media_session_pattern.search(service_src)
+
+          if not media_session_match:
+              print("")
+              print("WARNING: Could not find exact MediaSession.Builder(this, player)")
+              print("The installed plugin source may use a different construction pattern.")
+              print("")
+              print("Relevant MediaSession lines:")
+
+              for line in service_src.splitlines():
+                  if "MediaSession" in line or "mediaSession" in line:
+                      print(line)
+
+              fail(
+                  "Stopping instead of guessing how MediaSession is constructed."
+              )
+
+          print("Verified MediaSession.Builder(this, player) exists.")
+
+          # ------------------------------------------------------------
+          # 5. Patch AudioSource INSIDE AudioSource class
+          # ------------------------------------------------------------
+
+          source_start, source_end = class_body_range(
+              source_src,
+              "AudioSource"
+          )
+
+          source_body = source_src[source_start:source_end]
+
+          source_additions = []
+
+          if "onNextCallbackId" not in source_body:
+              source_additions.append(
+                  """
+              private String onNextCallbackId;
+              private String onPrevCallbackId;
+              """
+              )
+
+          if "setOnNext(" not in source_body:
+              source_additions.append(
+                  """
+              public void setOnNext(String callbackId) {
+                  this.onNextCallbackId = callbackId;
+              }
+              """
+              )
+
+          if "setOnPrev(" not in source_body:
+              source_additions.append(
+                  """
+              public void setOnPrev(String callbackId) {
+                  this.onPrevCallbackId = callbackId;
+              }
+              """
+              )
+
+          if "fireNext(" not in source_body:
+              source_additions.append(
+                  """
+              public void fireNext() {
+                  if (onNextCallbackId != null) {
+                      pluginOwner.getBridge().getSavedCall(onNextCallbackId).resolve();
+                  }
+              }
+              """
+              )
+
+          if "firePrevious(" not in source_body:
+              source_additions.append(
+                  """
+              public void firePrevious() {
+                  if (onPrevCallbackId != null) {
+                      pluginOwner.getBridge().getSavedCall(onPrevCallbackId).resolve();
+                  }
+              }
+              """
+              )
+
+          if source_additions:
+              insertion = "\n".join(source_additions) + "\n"
+              source_src = (
+                  source_src[:source_end]
+                  + insertion
+                  + source_src[source_end:]
+              )
+
+          # ------------------------------------------------------------
+          # 6. Patch AudioPlayerPlugin INSIDE AudioPlayerPlugin class
+          # ------------------------------------------------------------
+
+          plugin_start, plugin_end = class_body_range(
+              plugin_src,
+              "AudioPlayerPlugin"
+          )
+
+          plugin_body = plugin_src[plugin_start:plugin_end]
+
+          plugin_additions = []
+
+          if "void onNext(" not in plugin_body:
+              plugin_additions.append(
+                  """
+              @PluginMethod(returnType = PluginMethod.RETURN_CALLBACK)
+              public void onNext(PluginCall call) {
+                  String audioId = call.getString("audioId");
+                  AudioSource audioSource = audioSources.get(audioId);
+
+                  if (audioSource != null) {
+                      audioSource.setOnNext(call.getCallbackId());
+                  }
+              }
+              """
+              )
+
+          if "void onPrevious(" not in plugin_body:
+              plugin_additions.append(
+                  """
+              @PluginMethod(returnType = PluginMethod.RETURN_CALLBACK)
+              public void onPrevious(PluginCall call) {
+                  String audioId = call.getString("audioId");
+                  AudioSource audioSource = audioSources.get(audioId);
+
+                  if (audioSource != null) {
+                      audioSource.setOnPrev(call.getCallbackId());
+                  }
+              }
+              """
+              )
+
+          if plugin_additions:
+              insertion = "\n".join(plugin_additions) + "\n"
+              plugin_src = (
+                  plugin_src[:plugin_end]
+                  + insertion
+                  + plugin_src[plugin_end:]
+              )
+
+          # ------------------------------------------------------------
+          # 7. Patch AudioPlayerService INSIDE service class
+          # ------------------------------------------------------------
+
+          service_start, service_end = class_body_range(
+              service_src,
+              "AudioPlayerService"
+          )
+
+          service_body = service_src[service_start:service_end]
+
+          # Import ForwardingPlayer if missing.
+          if "import androidx.media3.common.ForwardingPlayer;" not in service_src:
+              import_match = list(
+                  re.finditer(
+                      r"^import\s+[^;]+;\s*$",
+                      service_src,
+                      re.MULTILINE
+                  )
+              )
+
+              if not import_match:
+                  fail(
+                      "Could not locate import section in AudioPlayerService.java."
+                  )
+
+              insert_at = import_match[-1].end()
+              service_src = (
+                  service_src[:insert_at]
+                  + "\nimport androidx.media3.common.ForwardingPlayer;"
+                  + service_src[insert_at:]
+              )
+
+          # Recalculate class scope after import modification.
+          service_start, service_end = class_body_range(
+              service_src,
+              "AudioPlayerService"
+          )
+
+          service_body = service_src[service_start:service_end]
+
+          # We only modify the exact MediaSession constructor expression.
+          wrapper_block = """
           ForwardingPlayer forwardingPlayer = new ForwardingPlayer(player) {
-
               @Override
               public boolean hasNextMediaItem() {
                   return true;
@@ -419,154 +477,201 @@ jobs:
 
               @Override
               public void seekToNext() {
-                  AudioSource source =
+                  AudioSource notificationSource =
                       getAudioSourcesFromMediaSession().forNotification();
 
-                  if (source != null) {
-                      source.fireNext();
+                  if (notificationSource != null) {
+                      notificationSource.fireNext();
                   }
               }
 
               @Override
               public void seekToPrevious() {
-                  AudioSource source =
+                  AudioSource notificationSource =
                       getAudioSourcesFromMediaSession().forNotification();
 
-                  if (source != null) {
-                      source.firePrevious();
+                  if (notificationSource != null) {
+                      notificationSource.firePrevious();
                   }
               }
           };
+          """
 
-          '''
-
-              service = player_pattern.sub(
-                  "MediaSession.Builder(this, forwardingPlayer)",
-                  service,
+          # Only inject once.
+          if "ForwardingPlayer forwardingPlayer" not in service_body:
+              service_src = media_session_pattern.sub(
+                  "new MediaSession.Builder(this, forwardingPlayer)",
+                  service_src,
                   count=1
               )
 
-              # Insert wrapper immediately before MediaSession.Builder
-              builder_index = service.find(
-                  "MediaSession.Builder(this, forwardingPlayer)"
+              # Recalculate exact class scope.
+              service_start, service_end = class_body_range(
+                  service_src,
+                  "AudioPlayerService"
               )
 
-              if builder_index < 0:
-                  print("ERROR: MediaSession builder replacement failed.")
-                  sys.exit(1)
+              service_body = service_src[service_start:service_end]
 
-              service = (
-                  service[:builder_index]
-                  + forwarding
-                  + service[builder_index:]
+              # Locate the player declaration and insert wrapper directly
+              # before MediaSession construction.
+              media_builder_match = re.search(
+                  r"new\s+MediaSession\.Builder\s*\(\s*this\s*,\s*forwardingPlayer\s*\)",
+                  service_body
               )
 
-          service_path.write_text(service, encoding="utf-8")
+              if not media_builder_match:
+                  fail(
+                      "MediaSession constructor replacement failed. "
+                      "Stopping before Gradle."
+                  )
 
-          print("NativeAudio source patch completed.")
-          PY
+              # Insert wrapper immediately before MediaSession construction.
+              absolute_builder_start = (
+                  service_start + media_builder_match.start()
+              )
 
-      # =========================================================
-      # VERIFY NATIVE PATCH
-      # =========================================================
-      - name: Verify NativeAudio patch
-        shell: bash
-        run: |
-          set -e
+              service_src = (
+                  service_src[:absolute_builder_start]
+                  + wrapper_block
+                  + "\n"
+                  + service_src[absolute_builder_start:]
+              )
 
-          cd "$PROJECT_DIR"
+          # ------------------------------------------------------------
+          # 8. Write patched source
+          # ------------------------------------------------------------
 
-          echo "========================================"
-          echo "VERIFY NATIVE AUDIO PATCH"
-          echo "========================================"
+          write_file(PLAYER_SERVICE, service_src)
+          write_file(AUDIO_SOURCE, source_src)
+          write_file(AUDIO_PLUGIN, plugin_src)
 
-          BASE="node_modules/@mediagrid/capacitor-native-audio/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio"
+          # ------------------------------------------------------------
+          # 9. Re-open ACTUAL disk files and validate
+          # ------------------------------------------------------------
 
-          for ITEM in \
-            "AudioPlayerService.java" \
-            "AudioSource.java" \
-            "AudioPlayerPlugin.java"
-          do
-            if [ ! -f "$BASE/$ITEM" ]; then
-              echo "ERROR: $ITEM missing."
-              exit 1
-            fi
-          done
+          service_check = read_file(PLAYER_SERVICE)
+          source_check = read_file(AUDIO_SOURCE)
+          plugin_check = read_file(AUDIO_PLUGIN)
 
-          if ! grep -q "ForwardingPlayer" \
-            "$BASE/AudioPlayerService.java"; then
-            echo "ERROR: ForwardingPlayer patch missing."
-            exit 1
-          fi
+          required_checks = {
+              "AudioPlayerPlugin: onNext": class_has_method(
+                  plugin_check,
+                  "AudioPlayerPlugin",
+                  "onNext"
+              ),
+              "AudioPlayerPlugin: onPrevious": class_has_method(
+                  plugin_check,
+                  "AudioPlayerPlugin",
+                  "onPrevious"
+              ),
+              "AudioSource: setOnNext": class_has_method(
+                  source_check,
+                  "AudioSource",
+                  "setOnNext"
+              ),
+              "AudioSource: setOnPrev": class_has_method(
+                  source_check,
+                  "AudioSource",
+                  "setOnPrev"
+              ),
+              "AudioSource: fireNext": class_has_method(
+                  source_check,
+                  "AudioSource",
+                  "fireNext"
+              ),
+              "AudioSource: firePrevious": class_has_method(
+                  source_check,
+                  "AudioSource",
+                  "firePrevious"
+              ),
+              "AudioPlayerService: seekToNext": class_has_method(
+                  service_check,
+                  "AudioPlayerService",
+                  "seekToNext"
+              ),
+              "AudioPlayerService: seekToPrevious": class_has_method(
+                  service_check,
+                  "AudioPlayerService",
+                  "seekToPrevious"
+              ),
+          }
 
-          if ! grep -q "seekToNext" \
-            "$BASE/AudioPlayerService.java"; then
-            echo "ERROR: seekToNext patch missing."
-            exit 1
-          fi
+          print("")
+          print("============================================================")
+          print("NATIVE LOCK-SCREEN VALIDATION")
+          print("============================================================")
 
-          if ! grep -q "seekToPrevious" \
-            "$BASE/AudioPlayerService.java"; then
-            echo "ERROR: seekToPrevious patch missing."
-            exit 1
-          fi
+          for name, result in required_checks.items():
+              print(f"{name} = {'YES' if result else 'NO'}")
 
-          if ! grep -q "fireNext" \
-            "$BASE/AudioSource.java"; then
-            echo "ERROR: fireNext missing."
-            exit 1
-          fi
+          if not all(required_checks.values()):
+              fail(
+                  "One or more required native Next/Previous methods "
+                  "were not injected inside their intended Java classes."
+              )
 
-          if ! grep -q "firePrevious" \
-            "$BASE/AudioSource.java"; then
-            echo "ERROR: firePrevious missing."
-            exit 1
-          fi
+          # ------------------------------------------------------------
+          # 10. Verify callback fields / ForwardingPlayer
+          # ------------------------------------------------------------
 
-          if ! grep -q "void onNext" \
-            "$BASE/AudioPlayerPlugin.java"; then
-            echo "ERROR: onNext plugin bridge missing."
-            exit 1
-          fi
+          required_strings = [
+              ("AudioSource.onNextCallbackId", "onNextCallbackId", source_check),
+              ("AudioSource.onPrevCallbackId", "onPrevCallbackId", source_check),
+              ("AudioSource.fireNext", "fireNext()", source_check),
+              ("AudioSource.firePrevious", "firePrevious()", source_check),
+              ("AudioPlayerService.ForwardingPlayer", "ForwardingPlayer forwardingPlayer", service_check),
+              ("AudioPlayerService.MediaSession", "MediaSession.Builder(this, forwardingPlayer)", service_check),
+          ]
 
-          if ! grep -q "void onPrevious" \
-            "$BASE/AudioPlayerPlugin.java"; then
-            echo "ERROR: onPrevious plugin bridge missing."
-            exit 1
-          fi
+          for label, needle, content in required_strings:
+              if needle not in content:
+                  fail(
+                      f"Required native source element missing: {label}"
+                  )
 
-          echo "NATIVE_NEXT_PREVIOUS_PATCH=PASS" >> "$GITHUB_ENV"
+          # ------------------------------------------------------------
+          # 11. Basic Java structural validation
+          # ------------------------------------------------------------
 
-          echo ""
-          echo "Native Next/Previous bridge verified."
+          def brace_balance(source):
+              depth = 0
+              for char in source:
+                  if char == "{":
+                      depth += 1
+                  elif char == "}":
+                      depth -= 1
 
-      # =========================================================
-      # ANDROID MANIFEST
-      # =========================================================
-      - name: Configure Android media service
-        shell: bash
-        run: |
-          set -e
+                  if depth < 0:
+                      return depth
 
-          cd "$PROJECT_DIR"
+              return depth
 
-          echo "========================================"
-          echo "ANDROID MEDIA SERVICE"
-          echo "========================================"
+          for label, content in [
+              ("AudioPlayerService.java", service_check),
+              ("AudioSource.java", source_check),
+              ("AudioPlayerPlugin.java", plugin_check),
+          ]:
+              if brace_balance(content) != 0:
+                  fail(
+                      f"{label} has unbalanced braces after patch."
+                  )
 
-          python3 <<'PY'
-          from pathlib import Path
-          import re
+              if not content.lstrip().startswith("package "):
+                  fail(
+                      f"{label} package declaration is no longer valid."
+                  )
 
-          manifest_path = Path(
-              "android/app/src/main/AndroidManifest.xml"
-          )
+          print("")
+          print("Native Java structural validation: PASS")
+          print("Native Next/Previous bridge validation: PASS")
 
-          strings_path = Path(
-              "android/app/src/main/res/values/strings.xml"
-          )
+          # ------------------------------------------------------------
+          # 12. Manifest configuration
+          # ------------------------------------------------------------
 
-          manifest = manifest_path.read_text(encoding="utf-8")
+          manifest_path = "android/app/src/main/AndroidManifest.xml"
+          manifest = read_file(manifest_path)
 
           permissions = [
               "android.permission.FOREGROUND_SERVICE",
@@ -576,121 +681,90 @@ jobs:
 
           for permission in permissions:
               if permission not in manifest:
-                  match = re.search(r"<application\b", manifest)
-
-                  if not match:
-                      raise RuntimeError(
-                          "Could not find <application>."
-                      )
-
-                  insert_at = match.start()
-
-                  permission_xml = (
-                      f'<uses-permission android:name="{permission}" />\n    '
+                  manifest = re.sub(
+                      r"<application\b",
+                      f'<uses-permission android:name="{permission}" />\n    <application',
+                      manifest,
+                      count=1
                   )
 
-                  manifest = (
-                      manifest[:insert_at]
-                      + permission_xml
-                      + manifest[insert_at:]
-                  )
-
-          service_name = (
-              "us.mediagrid.capacitorjs.plugins.nativeaudio."
-              "AudioPlayerService"
-          )
-
-          if service_name not in manifest:
-              service_xml = '''        <service
-              android:name="us.mediagrid.capacitorjs.plugins.nativeaudio.AudioPlayerService"
-              android:description="@string/audio_player_service_description"
-              android:foregroundServiceType="mediaPlayback"
-              android:exported="true">
-              <intent-filter>
-                  <action android:name="androidx.media3.session.MediaSessionService"/>
-              </intent-filter>
-          </service>
-          '''
-
-              if "</application>" not in manifest:
-                  raise RuntimeError(
-                      "Could not find </application>."
-                  )
+          if "AudioPlayerService" not in manifest:
+              service_xml = """
+              <service
+                  android:name="us.mediagrid.capacitorjs.plugins.nativeaudio.AudioPlayerService"
+                  android:description="@string/audio_player_service_description"
+                  android:foregroundServiceType="mediaPlayback"
+                  android:exported="true">
+                  <intent-filter>
+                      <action android:name="androidx.media3.session.MediaSessionService"/>
+                  </intent-filter>
+              </service>
+              """
 
               manifest = manifest.replace(
                   "</application>",
-                  service_xml + "    </application>",
+                  service_xml + "\n</application>",
                   1
               )
 
-          manifest_path.write_text(manifest, encoding="utf-8")
+          write_file(manifest_path, manifest)
 
-          strings = strings_path.read_text(encoding="utf-8")
+          # ------------------------------------------------------------
+          # 13. Verify manifest after injection
+          # ------------------------------------------------------------
 
-          if "audio_player_service_description" not in strings:
-              description = (
-                  '    <string name="audio_player_service_description">'
-                  "Allows audio playback to continue in the background."
-                  "</string>\n"
+          manifest_check = read_file(manifest_path)
+
+          for permission in permissions:
+              if permission not in manifest_check:
+                  fail(
+                      f"Manifest permission missing after injection: {permission}"
+                  )
+
+          if "AudioPlayerService" not in manifest_check:
+              fail(
+                  "AudioPlayerService missing from AndroidManifest.xml."
               )
 
-              strings = strings.replace(
-                  "</resources>",
-                  description + "</resources>",
-                  1
-              )
+          print("Android Manifest validation: PASS")
 
-              strings_path.write_text(
-                  strings,
-                  encoding="utf-8"
-              )
+          # ------------------------------------------------------------
+          # 14. strings.xml
+          # ------------------------------------------------------------
 
-          print("Android media configuration completed.")
-          PY
+          strings_path = "android/app/src/main/res/values/strings.xml"
 
-      # =========================================================
-      # VERIFY MANIFEST
-      # =========================================================
-      - name: Verify Android media configuration
-        shell: bash
-        run: |
-          set -e
+          if os.path.exists(strings_path):
+              strings = read_file(strings_path)
 
-          cd "$PROJECT_DIR"
+              if "audio_player_service_description" not in strings:
+                  strings = strings.replace(
+                      "</resources>",
+                      '    <string name="audio_player_service_description">Allows for audio to play in the background.</string>\n</resources>',
+                      1
+                  )
 
-          echo "========================================"
-          echo "VERIFY MEDIA CONFIGURATION"
-          echo "========================================"
+                  write_file(strings_path, strings)
 
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          print("Media service configuration: PASS")
 
-          REQUIRED=(
-            "android.permission.FOREGROUND_SERVICE"
-            "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
-            "android.permission.WAKE_LOCK"
-            "us.mediagrid.capacitorjs.plugins.nativeaudio.AudioPlayerService"
-          )
+          # ------------------------------------------------------------
+          # CI status file
+          # ------------------------------------------------------------
 
-          for ITEM in "${REQUIRED[@]}"; do
-            if grep -q "$ITEM" "$MANIFEST"; then
-              echo "PASS: $ITEM"
-            else
-              echo "ERROR: Missing $ITEM"
-              exit 1
-            fi
-          done
+          with open("ci_status.env", "w", encoding="utf-8") as f:
+              f.write(f"NATIVE_AUDIO_VERSION={plugin_version}\n")
+              f.write("NATIVE_NEXT=YES\n")
+              f.write("NATIVE_PREVIOUS=YES\n")
+              f.write("MANIFEST_SERVICE=PASS\n")
 
-          echo "MANIFEST_SERVICE=PASS" >> "$GITHUB_ENV"
-
-      # =========================================================
-      # APP ICON
-      # =========================================================
+      # ============================================================
+      # GENERATE APP ICON
+      # ============================================================
       - name: Generate Android launcher icons
         shell: bash
         run: |
           set -e
-
-          cd "$PROJECT_DIR"
 
           echo "========================================"
           echo "ANDROID APP ICON"
@@ -698,121 +772,108 @@ jobs:
 
           if [ ! -f "assets/icon.png" ]; then
             echo "ERROR: assets/icon.png is missing."
+            echo "Please upload the logo as assets/icon.png"
+            echo 'LAUNCHER_ICONS=FAIL' >> ci_status.env
             exit 1
           fi
 
-          echo "Icon found:"
           file assets/icon.png
-          ls -lh assets/icon.png
 
-          npm install --no-save @capacitor/assets
+          npm install -g @capacitor/assets
 
           npx @capacitor/assets generate --android
 
-          ICON_COUNT=$(
-            find android/app/src/main/res \
-              -type f \
-              \( \
-                -name "ic_launcher*" \
-                -o -name "ic_launcher_foreground*" \
-                -o -name "ic_launcher_background*" \
-              \) \
-              | wc -l
-          )
+          echo "Verifying generated Android launcher icons..."
 
-          echo "Generated icon resources: $ICON_COUNT"
-
-          if [ "$ICON_COUNT" -eq 0 ]; then
-            echo "ERROR: Launcher icons were not generated."
+          if [ ! -d "android/app/src/main/res" ]; then
+            echo "ERROR: Android res directory missing."
+            echo 'LAUNCHER_ICONS=FAIL' >> ci_status.env
             exit 1
           fi
 
-          echo "LAUNCHER_ICONS=PASS" >> "$GITHUB_ENV"
+          ICON_COUNT=$(find android/app/src/main/res -type f \
+            \( -name "ic_launcher*" -o -name "ic_launcher_foreground*" -o -name "ic_launcher_background*" \) \
+            | wc -l)
 
-      # =========================================================
-      # JAVA / GRADLE BUILD
-      # =========================================================
+          echo "Generated launcher icon files: $ICON_COUNT"
+
+          if [ "$ICON_COUNT" -lt 1 ]; then
+            echo "ERROR: No launcher icon resources were generated."
+            echo 'LAUNCHER_ICONS=FAIL' >> ci_status.env
+            exit 1
+          fi
+
+          echo 'LAUNCHER_ICONS=PASS' >> ci_status.env
+
+          echo "Android launcher icon generation: PASS"
+
+      # ============================================================
+      # BUILD APK
+      # ============================================================
       - name: Build Android APK
+        working-directory: ./android
         shell: bash
         run: |
           set -e
 
-          cd "$PROJECT_DIR/android"
-
-          echo "========================================"
-          echo "ANDROID APK BUILD"
-          echo "========================================"
-
           chmod +x gradlew
 
           ./gradlew clean
-
           ./gradlew assembleDebug --stacktrace
 
-      # =========================================================
-      # APK VERIFY
-      # =========================================================
+      # ============================================================
+      # VERIFY APK
+      # ============================================================
       - name: Verify APK
         shell: bash
         run: |
           set -e
 
-          APK="$PROJECT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
+          APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
 
-          echo "========================================"
-          echo "APK VERIFICATION"
-          echo "========================================"
-
-          if [ ! -f "$APK" ]; then
+          if [ ! -f "$APK_PATH" ]; then
             echo "ERROR: APK was not generated."
+            echo 'APK_BUILD=FAIL' >> ci_status.env
             exit 1
           fi
 
-          ls -lh "$APK"
+          APK_SIZE=$(du -h "$APK_PATH" | cut -f1)
 
-          echo "APK_BUILD=PASS" >> "$GITHUB_ENV"
+          echo "APK generated successfully."
+          echo "APK size: $APK_SIZE"
 
-      # =========================================================
+          echo 'APK_BUILD=PASS' >> ci_status.env
+
+      # ============================================================
       # UPLOAD APK
-      # =========================================================
+      # ============================================================
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: machi-pottu-thaaku-debug-apk
-          path: "${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk"
+          name: machi-pottu-thaaku-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-      # =========================================================
+      # ============================================================
       # FINAL SUMMARY
-      # =========================================================
+      # ============================================================
       - name: Final CI Summary
         if: always()
         shell: bash
         run: |
-          echo "========================================"
-          echo "MACHI POTTU THAAKU BUILD SUMMARY"
-          echo "========================================"
+          echo "## 🎵 Machi Pottu Thaaku — Android Build" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          echo ""
-          echo "NativeAudio: ${NATIVE_AUDIO_VERSION:-Unknown}"
-          echo "Vite Build: ${VITE_BUILD:-FAIL}"
-          echo "Capacitor Sync: ${CAPACITOR_SYNC:-FAIL}"
-          echo "Native Next/Previous Patch: ${NATIVE_NEXT_PREVIOUS_PATCH:-FAIL}"
-          echo "Manifest Service: ${MANIFEST_SERVICE:-FAIL}"
-          echo "Launcher Icons: ${LAUNCHER_ICONS:-FAIL}"
-          echo "APK Build: ${APK_BUILD:-FAIL}"
+          if [ -f "ci_status.env" ]; then
+            source ci_status.env
+          fi
 
-          {
-            echo "## 🎵 Machi Pottu Thaaku — Android Build"
-            echo ""
-            echo "| Check | Result |"
-            echo "|---|---|"
-            echo "| NativeAudio | ${NATIVE_AUDIO_VERSION:-Unknown} |"
-            echo "| Vite Build | ${VITE_BUILD:-FAIL} |"
-            echo "| Capacitor Sync | ${CAPACITOR_SYNC:-FAIL} |"
-            echo "| Native Next/Previous Patch | ${NATIVE_NEXT_PREVIOUS_PATCH:-FAIL} |"
-            echo "| Manifest Service | ${MANIFEST_SERVICE:-FAIL} |"
-            echo "| Launcher Icons | ${LAUNCHER_ICONS:-FAIL} |"
-            echo "| APK Build | ${APK_BUILD:-FAIL} |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| NativeAudio Version | ${NATIVE_AUDIO_VERSION:-Unknown} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Native Next Bridge | ${NATIVE_NEXT:-FAIL} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Native Previous Bridge | ${NATIVE_PREVIOUS:-FAIL} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Manifest Service | ${MANIFEST_SERVICE:-FAIL} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Launcher Icons | ${LAUNCHER_ICONS:-FAIL} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| APK Build | ${APK_BUILD:-FAIL} |" >> "$GITHUB_STEP_SUMMARY"
