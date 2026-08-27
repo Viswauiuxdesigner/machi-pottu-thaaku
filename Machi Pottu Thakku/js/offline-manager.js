@@ -63,9 +63,18 @@ class OfflineManagerClass {
         return true;
     }
 
-    async getLocalUrl(trackId) {
+    async getLocalUrls(trackId) {
         if (!this.offlineTracks[trackId]) return null;
-        const path = this.offlineTracks[trackId].localPath;
+        const track = this.offlineTracks[trackId];
+        
+        if (track.nativeUrl && track.webViewUrl) {
+            return {
+                nativeUrl: track.nativeUrl,
+                webViewUrl: track.webViewUrl
+            };
+        }
+        
+        const path = track.localPath;
         
         if (this.Filesystem && this.Directory) {
             try {
@@ -73,7 +82,10 @@ class OfflineManagerClass {
                     path: path,
                     directory: this.Directory.Data
                 });
-                return Capacitor.convertFileSrc(uriResult.uri);
+                return {
+                    nativeUrl: uriResult.uri,
+                    webViewUrl: Capacitor.convertFileSrc(uriResult.uri)
+                };
             } catch (e) {
                 console.error("Failed to get local URI", e);
                 return null;
@@ -118,13 +130,27 @@ class OfflineManagerClass {
         const fileName = `offline_${track.id}.${extension}`;
         
         try {
-            await this.Filesystem.downloadFile({
+            const result = await this.Filesystem.downloadFile({
                 url: downloadUrl,
                 path: fileName,
                 directory: this.Directory.Data
             });
             
-            // 3. Save metadata
+            // Generate both native and web URIs
+            let nativeUrl = '';
+            let webViewUrl = '';
+            try {
+                const uriResult = await this.Filesystem.getUri({
+                    path: fileName,
+                    directory: this.Directory.Data
+                });
+                nativeUrl = uriResult.uri;
+                webViewUrl = Capacitor.convertFileSrc(uriResult.uri);
+            } catch (e) {
+                console.error("Failed to generate URIs post-download", e);
+            }
+            
+            // 3. Save canonical metadata
             const offlineTrack = {
                 id: track.id,
                 title: track.title,
@@ -134,6 +160,8 @@ class OfflineManagerClass {
                 thumbnail: track.thumbnail || '',
                 s3Key: track.s3Key,
                 localPath: fileName,
+                nativeUrl: nativeUrl,
+                webViewUrl: webViewUrl,
                 downloadedAt: Date.now()
             };
             

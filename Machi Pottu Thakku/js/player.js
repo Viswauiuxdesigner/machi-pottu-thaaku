@@ -17,6 +17,12 @@ class AudioPlayer {
             console.error("Audio element not found!");
             return;
         }
+        
+        // Native Audio State Machine
+        this.nativeInitialized = false;
+        this.nativeReady = false;
+        this.playRequestId = 0;
+        this.currentNativeSource = null;
 
         this.setupListeners();
         this.setupAudioEvents();
@@ -71,6 +77,7 @@ class AudioPlayer {
         
         // Setup NativeAudio Listener if running natively
         if (Capacitor.isNativePlatform()) {
+            // Register exactly once before initialize
             NativeAudio.addListener('onPlaybackStatusChange', (result) => {
                 if (result.status === 'playing') this.syncUIState(true);
                 else this.syncUIState(false);
@@ -78,14 +85,15 @@ class AudioPlayer {
             NativeAudio.addListener('onAudioEnd', () => {
                 this.playNext();
             });
+            NativeAudio.addListener('onAudioReady', () => {
+                this.nativeReady = true;
+            });
             
             // Periodically sync progress from native audio
             setInterval(async () => {
-                if (this.currentTrack && Capacitor.isNativePlatform()) {
+                if (this.currentTrack && Capacitor.isNativePlatform() && this.nativeInitialized) {
                     try {
                         const { currentTime } = await NativeAudio.getCurrentTime({ audioId: 'main' });
-                        // To get duration we might also need getDuration, but let's keep track duration from queue
-                        // or just try to get it.
                         let duration = 0;
                         try {
                             const dur = await NativeAudio.getDuration({ audioId: 'main' });
@@ -145,6 +153,17 @@ class AudioPlayer {
 
         this.currentTrack = track;
         
+        // Anti-race mechanism
+        this.playRequestId++;
+        const currentReqId = this.playRequestId;
+        
+        // Stop current loading/playback if switching
+        if (Capacitor.isNativePlatform() && this.nativeInitialized) {
+            try { await NativeAudio.pause({ audioId: 'main' }); } catch(e) {}
+        } else {
+            this.audio.pause();
+        }
+        
         // Update Queue
         if (queueList.length > 0) {
             this.queue = queueList;
@@ -159,85 +178,105 @@ class AudioPlayer {
         try {
             // Check Offline First
             let isOfflineTrack = false;
+            let localUrls = null;
             if (window.OfflineManager) {
                 isOfflineTrack = await window.OfflineManager.isDownloaded(track.id);
             }
             
+            let finalUrl = null;
+            let isNativeUri = false;
+            
             if (isOfflineTrack) {
                 console.log("[PLAYBACK] Playing local downloaded track");
-                const localUrl = await window.OfflineManager.getLocalUrl(track.id);
-                if (localUrl) {
+                localUrls = await window.OfflineManager.getLocalUrls(track.id);
+                if (localUrls) {
                     if (Capacitor.isNativePlatform()) {
-                        await NativeAudio.create({
-                            audioId: 'main',
-                            audioSource: localUrl,
-                            friendlyTitle: track.title,
-                            artistName: track.artist,
-                            artworkSource: track.thumbnail || '',
-                            useForNotification: true
-                        });
-                        await NativeAudio.play({ audioId: 'main' });
-                        this.syncUIState(true);
+                        finalUrl = localUrls.nativeUrl;
+                        isNativeUri = true;
                     } else {
-                        this.audio.src = localUrl;
-                        this.audio.play().catch(err => console.error("Local play prevented:", err));
+                        finalUrl = localUrls.webViewUrl;
                     }
-                    return;
                 }
             }
             
-            // Check if user is completely offline and track is not downloaded
-            if (!navigator.onLine) {
-                console.warn("[PLAYBACK] Offline and track not downloaded");
-                window.uiManager.showNotification("Cannot play this song while offline", "error");
-                
-                // Try to play next track automatically if available
-                setTimeout(() => {
-                    this.playNext(true); // pass flag if needed
-                }, 2000);
-                
-                return;
-            }
+            if (!finalUrl) {
+                // Check if user is completely offline and track is not downloaded
+                if (!navigator.onLine) {
+                    console.warn("[PLAYBACK] Offline and track not downloaded");
+                    window.uiManager.showNotification("Cannot play this song while offline", "error");
+                    this.syncUIState(false);
+                    return;
+                }
 
-            console.log("[FILEBASE PLAYBACK] Requesting signed URL");
-            const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
-            console.log(`[FILEBASE PLAYBACK] Request URL: ${requestUrl}`);
-            
-            const response = await fetch(requestUrl);
-            if (!response.ok) {
-                throw new Error("Failed to generate signed URL.");
+                console.log("[FILEBASE PLAYBACK] Requesting signed URL");
+                const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
+                console.log(`[FILEBASE PLAYBACK] Request URL: ${requestUrl}`);
+                
+                const response = await fetch(requestUrl);
+                if (!response.ok) {
+                    throw new Error("Failed to generate signed URL.");
+                }
+                const data = await response.json();
+                
+                if (data.error) throw new Error(data.error);
+                if (!data.url) throw new Error("No URL returned from server.");
+                
+                console.log("[FILEBASE PLAYBACK] Signed URL generated");
+                finalUrl = data.url;
             }
-            const data = await response.json();
             
-            if (data.error) throw new Error(data.error);
-            if (!data.url) throw new Error("No URL returned from server.");
-            
-            console.log("[FILEBASE PLAYBACK] Signed URL generated");
+            if (currentReqId !== this.playRequestId) return; // Stale request
             
             if (Capacitor.isNativePlatform()) {
-                await NativeAudio.create({
-                    audioId: 'main',
-                    audioSource: data.url,
-                    friendlyTitle: track.title,
-                    artistName: track.artist,
-                    artworkSource: track.thumbnail || '',
-                    useForNotification: true
-                });
+                if (!this.nativeInitialized) {
+                    console.log("[NATIVE AUDIO] create player");
+                    const res = await NativeAudio.create({
+                        audioId: 'main',
+                        audioSource: finalUrl,
+                        friendlyTitle: track.title,
+                        artistName: track.artist,
+                        artworkSource: track.thumbnail || '',
+                        useForNotification: true
+                    });
+                    
+                    if (res && res.success === false) throw new Error("Failed to create NativeAudio");
+                    this.nativeInitialized = true;
+                    this.currentNativeSource = finalUrl;
+                    
+                    console.log("[NATIVE AUDIO] initialize player");
+                    await NativeAudio.initialize({ audioId: 'main' });
+                } else if (this.currentNativeSource !== finalUrl) {
+                    console.log("[NATIVE AUDIO] changeAudioSource");
+                    await NativeAudio.changeAudioSource({
+                        audioId: 'main',
+                        source: finalUrl
+                    });
+                    console.log("[NATIVE AUDIO] changeMetadata");
+                    await NativeAudio.changeMetadata({
+                        audioId: 'main',
+                        friendlyTitle: track.title,
+                        artistName: track.artist,
+                        artworkSource: track.thumbnail || ''
+                    });
+                    this.currentNativeSource = finalUrl;
+                }
+                
+                if (currentReqId !== this.playRequestId) return; // Stale request
+
+                console.log("[NATIVE AUDIO] play");
                 await NativeAudio.play({ audioId: 'main' });
                 this.syncUIState(true);
             } else {
-                this.audio.src = data.url;
+                this.audio.src = finalUrl;
                 this.audio.play().catch(err => {
                     console.error("Autoplay prevented:", err);
                 });
             }
         } catch (error) {
-            console.error("[FILEBASE PLAYBACK] Error fetching presigned URL:", error);
+            console.error("[FILEBASE PLAYBACK] Error fetching presigned URL or creating player:", error);
             window.uiManager.showNotification("Playback failed: " + error.message, "error");
             this.syncUIState(false);
-            
-            // Auto skip on error if not network related
-            setTimeout(() => this.playNext(true), 2000);
+            // DO NOT auto-skip to the next track here
         }
     }
 
