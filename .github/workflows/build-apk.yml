@@ -9,105 +9,260 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # IMPORTANT:
-    # package.json, assets, js, android project are inside this folder.
-    defaults:
-      run:
-        working-directory: ./Machi Pottu Thaakku
-
     steps:
-      # ------------------------------------------------------------
+
+      # ============================================================
       # 1. CHECKOUT
-      # ------------------------------------------------------------
+      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------
-      # 2. NODE
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # 2. FIND ACTUAL PROJECT ROOT
+      #
+      # This repository contains:
+      #
+      # repository/
+      # └── Machi Pottu Thaakku/
+      #     ├── package.json
+      #     ├── assets/
+      #     ├── js/
+      #     └── ...
+      #
+      # We detect it automatically instead of hard-coding paths.
+      # ============================================================
+      - name: Detect project root
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "DETECTING PROJECT ROOT"
+          echo "========================================"
+
+          echo "GitHub workspace:"
+          echo "$GITHUB_WORKSPACE"
+
+          echo ""
+          echo "Searching for package.json..."
+
+          PACKAGE_JSON=$(find "$GITHUB_WORKSPACE" \
+            -maxdepth 3 \
+            -type f \
+            -name "package.json" \
+            -not -path "*/node_modules/*" \
+            | head -n 1)
+
+          if [ -z "$PACKAGE_JSON" ]; then
+            echo "ERROR: package.json could not be found."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PACKAGE_JSON")
+
+          echo ""
+          echo "package.json found:"
+          echo "$PACKAGE_JSON"
+
+          echo ""
+          echo "PROJECT_DIR:"
+          echo "$PROJECT_DIR"
+
+          if [ ! -f "$PROJECT_DIR/package.json" ]; then
+            echo "ERROR: Invalid project directory."
+            exit 1
+          fi
+
+          echo ""
+          echo "Project files:"
+          ls -la "$PROJECT_DIR"
+
+          echo ""
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          # Keep CI status outside the project directory so that
+          # later steps never accidentally use a nested working path.
+          echo "CI_STATUS_FILE=$GITHUB_WORKSPACE/ci_status.env" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "Project root detection: PASS"
+
+
+      # ============================================================
+      # 3. SETUP NODE
+      #
+      # IMPORTANT:
+      # No npm cache is enabled.
+      #
+      # The previous failure happened because setup-node attempted
+      # to resolve an npm lock file that does not exist.
+      # ============================================================
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
-          cache-dependency-path: "Machi Pottu Thaakku/package.json"
+          package-manager-cache: false
 
-      # ------------------------------------------------------------
-      # 3. JAVA
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # 4. SETUP JAVA
+      # ============================================================
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: "zulu"
           java-version: "21"
 
-      # ------------------------------------------------------------
-      # 4. VERIFY PROJECT LOCATION
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # 5. VERIFY PROJECT
+      # ============================================================
       - name: Verify project structure
+        shell: bash
         run: |
+          set -e
+
           echo "========================================"
-          echo "PROJECT STRUCTURE"
+          echo "VERIFYING PROJECT"
           echo "========================================"
 
+          cd "$PROJECT_DIR"
+
+          echo "Current directory:"
           pwd
 
           echo ""
-          echo "Checking package.json..."
-          test -f package.json
-          echo "PASS: package.json found"
 
-          echo ""
-          echo "Checking assets/icon.png..."
-          test -f assets/icon.png
-          echo "PASS: assets/icon.png found"
+          if [ ! -f "package.json" ]; then
+            echo "ERROR: package.json missing."
+            exit 1
+          fi
 
-          echo ""
-          echo "Checking JS files..."
-          test -f js/player.js
-          test -f js/offline-manager.js
-          test -f js/ui.js
-          echo "PASS: JS files found"
+          if [ ! -f "assets/icon.png" ]; then
+            echo "ERROR: assets/icon.png missing."
+            exit 1
+          fi
 
-          echo ""
-          echo "Project root:"
-          ls -la
+          if [ ! -f "js/player.js" ]; then
+            echo "ERROR: js/player.js missing."
+            exit 1
+          fi
 
-      # ------------------------------------------------------------
-      # 5. INSTALL DEPENDENCIES
-      # ------------------------------------------------------------
+          if [ ! -f "js/offline-manager.js" ]; then
+            echo "ERROR: js/offline-manager.js missing."
+            exit 1
+          fi
+
+          if [ ! -f "js/ui.js" ]; then
+            echo "ERROR: js/ui.js missing."
+            exit 1
+          fi
+
+          echo "package.json: PASS"
+          echo "assets/icon.png: PASS"
+          echo "player.js: PASS"
+          echo "offline-manager.js: PASS"
+          echo "ui.js: PASS"
+
+
+      # ============================================================
+      # 6. INSTALL DEPENDENCIES
+      # ============================================================
       - name: Install dependencies
-        run: npm install
-
-      # ------------------------------------------------------------
-      # 6. BUILD WEB APP
-      # ------------------------------------------------------------
-      - name: Build Web App
-        run: npm run build
-
-      # ------------------------------------------------------------
-      # 7. CAPACITOR ANDROID
-      # ------------------------------------------------------------
-      - name: Capacitor Add Android
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "========================================"
+          echo "INSTALLING NPM DEPENDENCIES"
+          echo "========================================"
+
+          npm install
+
+          echo ""
+          echo "npm install: PASS"
+
+
+      # ============================================================
+      # 7. BUILD WEB APP
+      # ============================================================
+      - name: Build Web App
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "========================================"
+          echo "VITE BUILD"
+          echo "========================================"
+
+          npm run build
+
+          echo ""
+          echo "Vite Build: PASS"
+
+
+      # ============================================================
+      # 8. CREATE / VERIFY ANDROID PROJECT
+      # ============================================================
+      - name: Capacitor Android project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "========================================"
+          echo "CAPACITOR ANDROID"
+          echo "========================================"
+
           if [ -d "android" ]; then
             echo "Android project already exists."
           else
-            echo "Android project not found. Creating it..."
+            echo "Android project does not exist."
+            echo "Creating Android project..."
+
             npx cap add android
           fi
 
-      # ------------------------------------------------------------
-      # 8. CAPACITOR SYNC
-      # ------------------------------------------------------------
-      - name: Capacitor Sync
-        run: npx cap sync android
+          echo ""
+          echo "Android project: PASS"
 
-      # ------------------------------------------------------------
-      # 9. CONFIGURE AND VERIFY ANDROID MEDIA SERVICE
-      # ------------------------------------------------------------
-      - name: Configure Android media service
+
+      # ============================================================
+      # 9. CAPACITOR SYNC
+      # ============================================================
+      - name: Capacitor Sync
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "========================================"
+          echo "CAPACITOR SYNC"
+          echo "========================================"
+
+          npx cap sync android
+
+          echo ""
+          echo "Capacitor Sync: PASS"
+
+
+      # ============================================================
+      # 10. CONFIGURE ANDROID MEDIA SERVICE
+      # ============================================================
+      - name: Configure Android media service
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           python3 <<'PY'
           import json
           import os
@@ -130,28 +285,20 @@ jobs:
           )
 
           if not plugin_version:
-              print("ERROR: @mediagrid/capacitor-native-audio not found.")
+              print("ERROR: NativeAudio plugin not found.")
               sys.exit(1)
 
           print(f"NativeAudio version: {plugin_version}")
 
-          readme_path = (
-              "node_modules/@mediagrid/capacitor-native-audio/README.md"
-          )
-
-          if not os.path.isfile(readme_path):
-              print("ERROR: NativeAudio README not found.")
-              sys.exit(1)
-
-          with open(readme_path, "r", encoding="utf-8") as f:
-              readme = f.read()
-
           manifest_path = "android/app/src/main/AndroidManifest.xml"
+
+          if not os.path.isfile(manifest_path):
+              print("ERROR: AndroidManifest.xml not found.")
+              sys.exit(1)
 
           with open(manifest_path, "r", encoding="utf-8") as f:
               manifest = f.read()
 
-          # Required foreground permissions.
           required_permissions = [
               "android.permission.FOREGROUND_SERVICE",
               "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
@@ -167,7 +314,6 @@ jobs:
                       count=1,
                   )
 
-          # Required AudioPlayerService.
           service_block = """<service
               android:name="us.mediagrid.capacitorjs.plugins.nativeaudio.AudioPlayerService"
               android:description="@string/audio_player_service_description"
@@ -178,7 +324,11 @@ jobs:
               </intent-filter>
           </service>"""
 
-          if "us.mediagrid.capacitorjs.plugins.nativeaudio.AudioPlayerService" not in manifest:
+          service_name = (
+              "us.mediagrid.capacitorjs.plugins.nativeaudio.AudioPlayerService"
+          )
+
+          if service_name not in manifest:
               manifest = manifest.replace(
                   "</application>",
                   f"\n        {service_block}\n    </application>",
@@ -189,7 +339,9 @@ jobs:
               f.write(manifest)
 
           # strings.xml
-          strings_path = "android/app/src/main/res/values/strings.xml"
+          strings_path = (
+              "android/app/src/main/res/values/strings.xml"
+          )
 
           if os.path.isfile(strings_path):
               with open(strings_path, "r", encoding="utf-8") as f:
@@ -198,14 +350,14 @@ jobs:
               if "audio_player_service_description" not in strings:
                   strings = strings.replace(
                       "</resources>",
-                      '    <string name="audio_player_service_description">Allows for audio to play in the background.</string>\n</resources>',
+                      '    <string name="audio_player_service_description">Allows audio playback in the background.</string>\n</resources>',
                       1,
                   )
 
                   with open(strings_path, "w", encoding="utf-8") as f:
                       f.write(strings)
 
-          # Final manifest validation.
+          # Final validation
           with open(manifest_path, "r", encoding="utf-8") as f:
               final_manifest = f.read()
 
@@ -227,71 +379,114 @@ jobs:
           print("Media Playback Permission: PASS")
           print("Wake Lock Permission: PASS")
 
-          with open("ci_status.env", "w", encoding="utf-8") as f:
+          with open(os.environ["CI_STATUS_FILE"], "w", encoding="utf-8") as f:
               f.write(f"NATIVE_AUDIO_VERSION={plugin_version}\n")
               f.write("MANIFEST_SERVICE=PASS\n")
           PY
 
-      # ------------------------------------------------------------
-      # 10. DIAGNOSE NATIVE NEXT / PREVIOUS
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # 11. DIAGNOSE NATIVE NEXT / PREVIOUS
+      #
+      # This step ONLY diagnoses the installed plugin.
+      # It does not break the APK build.
+      # ============================================================
       - name: Diagnose lock-screen Next and Previous
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           python3 <<'PY'
           import os
 
-          base = "node_modules/@mediagrid/capacitor-native-audio/android/src/main/java"
-
-          files = []
-
-          for root, _, names in os.walk(base):
-              for name in names:
-                  if name.endswith(".java"):
-                      files.append(os.path.join(root, name))
+          base = (
+              "node_modules/@mediagrid/"
+              "capacitor-native-audio/android/src/main/java"
+          )
 
           has_next = False
           has_previous = False
 
-          for path in files:
-              with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                  source = f.read()
+          for root, _, files in os.walk(base):
+              for filename in files:
+                  if not filename.endswith(".java"):
+                      continue
 
-              if (
-                  "COMMAND_SEEK_TO_NEXT" in source
-                  or "onSeekToNext" in source
-                  or "onSkipToNext" in source
-                  or "seekToNext" in source
-              ):
-                  has_next = True
+                  path = os.path.join(root, filename)
 
-              if (
-                  "COMMAND_SEEK_TO_PREVIOUS" in source
-                  or "onSeekToPrevious" in source
-                  or "onSkipToPrevious" in source
-                  or "seekToPrevious" in source
-              ):
-                  has_previous = True
+                  with open(
+                      path,
+                      "r",
+                      encoding="utf-8",
+                      errors="ignore"
+                  ) as f:
+                      source = f.read()
+
+                  if any(
+                      x in source
+                      for x in [
+                          "COMMAND_SEEK_TO_NEXT",
+                          "onSeekToNext",
+                          "onSkipToNext",
+                          "seekToNext"
+                      ]
+                  ):
+                      has_next = True
+
+                  if any(
+                      x in source
+                      for x in [
+                          "COMMAND_SEEK_TO_PREVIOUS",
+                          "onSeekToPrevious",
+                          "onSkipToPrevious",
+                          "seekToPrevious"
+                      ]
+                  ):
+                      has_previous = True
 
           print("========================================")
           print("LOCK-SCREEN MEDIA DIAGNOSTIC")
           print("========================================")
-          print(f"Native Next support: {'YES' if has_next else 'NO'}")
-          print(f"Native Previous support: {'YES' if has_previous else 'NO'}")
 
-          with open("ci_status.env", "a", encoding="utf-8") as f:
-              f.write(f"NATIVE_NEXT={'YES' if has_next else 'NO'}\n")
-              f.write(f"NATIVE_PREVIOUS={'YES' if has_previous else 'NO'}\n")
+          print(
+              f"Native Next support: "
+              f"{'YES' if has_next else 'NO'}"
+          )
 
-          print("")
-          print("NOTE:")
-          print("The diagnostic does not fail the APK build.")
+          print(
+              f"Native Previous support: "
+              f"{'YES' if has_previous else 'NO'}"
+          )
+
+          with open(
+              os.environ["CI_STATUS_FILE"],
+              "a",
+              encoding="utf-8"
+          ) as f:
+              f.write(
+                  f"NATIVE_NEXT="
+                  f"{'YES' if has_next else 'NO'}\n"
+              )
+
+              f.write(
+                  f"NATIVE_PREVIOUS="
+                  f"{'YES' if has_previous else 'NO'}\n"
+              )
           PY
 
-      # ------------------------------------------------------------
-      # 11. GENERATE APP ICON
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # 12. GENERATE APP ICON
+      # ============================================================
       - name: Generate Android launcher icons
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           echo "========================================"
           echo "ANDROID APP ICON"
           echo "========================================"
@@ -301,122 +496,210 @@ jobs:
             exit 1
           fi
 
-          echo "Found assets/icon.png"
+          echo "Icon source found."
 
           npm install -g @capacitor/assets
 
           npx @capacitor/assets generate --android
 
           echo ""
-          echo "Checking generated launcher resources..."
+          echo "Checking launcher resources..."
 
           if [ ! -d "android/app/src/main/res" ]; then
-            echo "ERROR: Android resources directory missing."
+            echo "ERROR: Android res directory missing."
             exit 1
           fi
 
-          ICON_COUNT=$(find android/app/src/main/res -type f \
-            \( -name "ic_launcher*" -o -name "ic_launcher_foreground*" -o -name "ic_launcher_background*" \) \
-            | wc -l)
+          ICON_COUNT=$(find \
+            android/app/src/main/res \
+            -type f \
+            \( \
+              -name "ic_launcher*" \
+              -o -name "ic_launcher_foreground*" \
+              -o -name "ic_launcher_background*" \
+            \) | wc -l)
 
-          echo "Generated launcher resource count: $ICON_COUNT"
+          echo "Launcher resource count: $ICON_COUNT"
 
           if [ "$ICON_COUNT" -eq 0 ]; then
-            echo "ERROR: No launcher icon resources generated."
+            echo "ERROR: Launcher icons were not generated."
             exit 1
           fi
 
           echo "Launcher Icons: PASS"
 
-          echo "LAUNCHER_ICONS=PASS" >> ci_status.env
+          echo "LAUNCHER_ICONS=PASS" >> "$CI_STATUS_FILE"
 
-      # ------------------------------------------------------------
-      # 12. VERIFY JS FILES
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # 13. VERIFY APPLICATION FILES
+      # ============================================================
       - name: Verify application files
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           echo "========================================"
-          echo "APPLICATION FILE VERIFICATION"
+          echo "APPLICATION FILES"
           echo "========================================"
 
-          test -f js/player.js
-          test -f js/offline-manager.js
-          test -f js/ui.js
-          test -f js/app.js
+          for file in \
+            js/player.js \
+            js/offline-manager.js \
+            js/ui.js \
+            js/app.js
+          do
+            if [ ! -f "$file" ]; then
+              echo "ERROR: Missing $file"
+              exit 1
+            fi
 
-          echo "player.js: PASS"
-          echo "offline-manager.js: PASS"
-          echo "ui.js: PASS"
-          echo "app.js: PASS"
+            echo "$file: PASS"
+          done
 
-      # ------------------------------------------------------------
-      # 13. BUILD APK
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # 14. BUILD APK
+      #
+      # IMPORTANT:
+      # No working-directory is used here.
+      # We explicitly cd to PROJECT_DIR.
+      #
+      # This prevents the previous:
+      #
+      # /Machi Pottu Thaakku/./Machi Pottu Thaakku/
+      #
+      # error.
+      # ============================================================
       - name: Build APK
-        working-directory: ./Machi Pottu Thaaku/android
+        shell: bash
         run: |
-          chmod +x gradlew
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "========================================"
+          echo "BUILDING ANDROID APK"
+          echo "========================================"
+
+          if [ ! -f "android/gradlew" ]; then
+            echo "ERROR: android/gradlew not found."
+            exit 1
+          fi
+
+          chmod +x android/gradlew
+
+          cd android
+
           ./gradlew clean
+
           ./gradlew assembleDebug --stacktrace
 
-      # ------------------------------------------------------------
-      # 14. VERIFY APK
-      # ------------------------------------------------------------
+          cd ..
+
+          echo ""
+          echo "APK compilation: PASS"
+
+
+      # ============================================================
+      # 15. VERIFY APK
+      # ============================================================
       - name: Verify APK
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          echo "========================================"
+          echo "VERIFYING APK"
+          echo "========================================"
 
           if [ ! -f "$APK" ]; then
             echo "ERROR: APK was not generated."
-            echo "APK_BUILD=FAIL" >> ci_status.env
+            echo "APK_BUILD=FAIL" >> "$CI_STATUS_FILE"
             exit 1
           fi
 
           SIZE=$(du -h "$APK" | cut -f1)
 
-          echo "========================================"
-          echo "APK BUILD SUCCESS"
-          echo "========================================"
-          echo "APK: $APK"
-          echo "Size: $SIZE"
+          echo "APK found:"
+          echo "$APK"
 
-          echo "APK_BUILD=PASS" >> ci_status.env
+          echo "APK size:"
+          echo "$SIZE"
 
-      # ------------------------------------------------------------
-      # 15. UPLOAD APK
-      # ------------------------------------------------------------
+          echo "APK_BUILD=PASS" >> "$CI_STATUS_FILE"
+
+
+      # ============================================================
+      # 16. UPLOAD APK
+      # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: machi-pottu-thaaku-debug
-          path: "Machi Pottu Thaaku/android/app/build/outputs/apk/debug/app-debug.apk"
+          path: "${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk"
           if-no-files-found: error
 
-      # ------------------------------------------------------------
-      # 16. FINAL CI SUMMARY
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # 17. FINAL SUMMARY
+      #
+      # Runs from repository root intentionally.
+      # This avoids the previous nested working-directory failure.
+      # ============================================================
       - name: Final CI Summary
         if: always()
+        shell: bash
         run: |
           echo "========================================"
           echo "MACHI POTTU THAAKU - ANDROID BUILD"
           echo "========================================"
 
-          if [ -f "ci_status.env" ]; then
-            cat ci_status.env
-            source ci_status.env
+          if [ -f "$CI_STATUS_FILE" ]; then
+            cat "$CI_STATUS_FILE"
+            source "$CI_STATUS_FILE"
+          else
+            echo "WARNING: CI status file not found."
           fi
 
           echo ""
-          echo "### 🎵 Machi Pottu Thaaku — Android Build" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 🎵 Machi Pottu Thaaku — Android Build" \
+            >> "$GITHUB_STEP_SUMMARY"
+
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| NativeAudio | ${NATIVE_AUDIO_VERSION:-Unknown} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Vite Build | PASS |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Capacitor Sync | PASS |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Manifest Service | ${MANIFEST_SERVICE:-FAIL} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Launcher Icons | ${LAUNCHER_ICONS:-FAIL} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Lock-screen Next | ${NATIVE_NEXT:-Unknown} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Lock-screen Previous | ${NATIVE_PREVIOUS:-Unknown} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| APK Build | ${APK_BUILD:-FAIL} |" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| Check | Result |" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "|---|---|" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| NativeAudio | ${NATIVE_AUDIO_VERSION:-Unknown} |" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| Vite Build | PASS |" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| Capacitor Sync | PASS |" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| Manifest Service | ${MANIFEST_SERVICE:-FAIL} |" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| Launcher Icons | ${LAUNCHER_ICONS:-FAIL} |" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| Lock-screen Next | ${NATIVE_NEXT:-Unknown} |" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| Lock-screen Previous | ${NATIVE_PREVIOUS:-Unknown} |" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| APK Build | ${APK_BUILD:-FAIL} |" \
+            >> "$GITHUB_STEP_SUMMARY"
