@@ -29,6 +29,10 @@ jobs:
     - name: Build Web App
       run: npm run build
       
+
+    - name: Capacitor Add Android
+      run: npx cap add android || echo "Android already added"
+      
     - name: Apply Custom NativeAudio Java
       run: |
         CUSTOM_SRC="package/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio"
@@ -66,9 +70,6 @@ jobs:
         
         echo "Custom NativeAudio Java successfully applied and validated."
         
-    - name: Capacitor Add Android
-      run: npx cap add android || echo "Android already added"
-      
     - name: Capacitor Sync
       run: npx cap sync android
       
@@ -137,14 +138,24 @@ jobs:
         has_next = False
         has_prev = False
         
+        print(f"DEBUG: Checking player_java_path = {player_java_path}")
+        print(f"DEBUG: player_java_path exists? {os.path.exists(player_java_path)}")
+        print(f"DEBUG: Checking service_java_path = {service_java_path}")
+        print(f"DEBUG: service_java_path exists? {os.path.exists(service_java_path)}")
+        
         for path in [player_java_path, service_java_path]:
             if os.path.exists(path):
                 with open(path, 'r', encoding='utf-8') as f:
                     content = f.read()
+                    print(f"DEBUG: Reading {path}, content length = {len(content)}")
+                    if 'COMMAND_SEEK_TO_NEXT' in content:
+                        print(f"DEBUG: FOUND COMMAND_SEEK_TO_NEXT in {path}")
                     if 'COMMAND_SEEK_TO_NEXT' in content or 'onSeekToNext' in content or 'onSkipToNext' in content:
                         has_next = True
                     if 'COMMAND_SEEK_TO_PREVIOUS' in content or 'onSeekToPrevious' in content or 'onSkipToPrevious' in content:
                         has_prev = True
+                        
+        print(f"DEBUG: Final has_next = {has_next}, has_prev = {has_prev}")
                         
         if not has_next or not has_prev:
             print('WARNING: The installed @mediagrid/capacitor-native-audio v3.0.0 is missing full Media3 Next/Previous lock-screen command support.')
