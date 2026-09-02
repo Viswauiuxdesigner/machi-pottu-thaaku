@@ -131,7 +131,7 @@ jobs:
                     f.write(strings)
                     
         # 6. Verify Java Source for Media3 Next/Previous Support
-        player_java_path = 'node_modules/@mediagrid/capacitor-native-audio/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio/AudioPlayer.java'
+        player_java_path = 'node_modules/@mediagrid/capacitor-native-audio/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio/AudioPlayerPlugin.java'
         service_java_path = 'node_modules/@mediagrid/capacitor-native-audio/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio/AudioPlayerService.java'
         
         has_next = False
