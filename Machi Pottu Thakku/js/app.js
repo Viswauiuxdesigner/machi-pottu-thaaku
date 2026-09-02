@@ -101,22 +101,6 @@ class App {
     async loadMusicLibrary(forceRefresh = false) {
         console.log("[FILEBASE LIBRARY] Loading library");
         try {
-            if (!forceRefresh) {
-                const cachedStr = sessionStorage.getItem('mpt_filebase_library');
-                if (cachedStr) {
-                    const cachedData = JSON.parse(cachedStr);
-                    // Ensure the cache is not older than 1 hour AND contains the new s3Key property
-                    if (cachedData && cachedData.songs && cachedData.songs.length > 0 && cachedData.songs[0].s3Key && Date.now() - cachedData.timestamp < 3600000) {
-                        this.musicLibrary = cachedData.songs;
-                        console.log("[FILEBASE LIBRARY] Loaded from local cache");
-                        console.log(`[FILEBASE LIBRARY] Objects found: ${this.musicLibrary.length}`);
-                        console.log(`[FILEBASE LIBRARY] Audio files: ${this.musicLibrary.length}`);
-                        console.log("[FILEBASE LIBRARY] Library ready");
-                        return;
-                    }
-                }
-            }
-
             const response = await fetch(window.getApiUrl('/.netlify/functions/music-library'));
             if (!response.ok) throw new Error('Failed to load music library from serverless function');
             const data = await response.json();
@@ -136,6 +120,17 @@ class App {
             console.log("[FILEBASE LIBRARY] Library ready");
         } catch (error) {
             console.error('[FILEBASE LIBRARY] Error loading music library:', error);
+            
+            // Fallback to cache if network fails
+            const cachedStr = sessionStorage.getItem('mpt_filebase_library');
+            if (cachedStr) {
+                const cachedData = JSON.parse(cachedStr);
+                if (cachedData && cachedData.songs && cachedData.songs.length > 0) {
+                    this.musicLibrary = cachedData.songs;
+                    console.log("[FILEBASE LIBRARY] Loaded from local cache as fallback");
+                    return;
+                }
+            }
             window.uiManager.showNotification("Failed to load music library. Backend credentials might be missing.", "error");
         }
     }
@@ -245,46 +240,52 @@ class App {
     }
 
     loadHomeData() {
-        const collections = [
-            { id: 'ar-rahman', title: "A.R.Rahman", folder: "A.R.Rahman", thumbnail: "https://picsum.photos/seed/A.R.Rahman/500/500" },
-            { id: 'hiphop', title: "Hiphop", folder: "Hiphop", thumbnail: "https://picsum.photos/seed/Hiphop/500/500" },
-            { id: 'new-releases', title: "Tamil New Releases", folder: "NewReleases", thumbnail: "https://picsum.photos/seed/NewReleases/500/500" },
-            { id: 'yuvan', title: "Yuvan", folder: "Yuvan", thumbnail: "https://picsum.photos/seed/Yuvan/500/500" },
-            { id: 'recently-added', title: "Recently Added", folder: "", thumbnail: "https://picsum.photos/seed/recent/500/500" }
-        ];
-        
         const container = document.getElementById('collections-grid');
         if (!container) return;
         
         container.innerHTML = '';
         
-        for (const coll of collections) {
-            const folderTracks = this.musicLibrary.filter(song => {
-                const parts = (song.s3Key || "").split('/');
-                const songFolder = parts.length > 1 ? parts[parts.length - 2] : "";
-                return songFolder === coll.folder;
-            });
+        const folderMap = new Map();
+        
+        this.musicLibrary.forEach(song => {
+            const parts = (song.s3Key || "").split('/');
+            // Tracks at the root directory will have songFolder = ""
+            const songFolder = parts.length > 1 ? parts[parts.length - 2] : "";
             
-            if (folderTracks.length === 0) continue;
+            if (!folderMap.has(songFolder)) {
+                folderMap.set(songFolder, []);
+            }
+            folderMap.get(songFolder).push(song);
+        });
+        
+        for (const [folder, tracks] of folderMap.entries()) {
+            if (tracks.length === 0) continue;
             
-            console.log(`[HOME] Rendering collection: ${coll.title} with ${folderTracks.length} tracks`);
+            const title = folder === "" ? "Recently Added" : folder;
+            const id = folder === "" ? "recently-added" : folder.toLowerCase().replace(/[^a-z0-9]/g, '-');
+            
+            const trackWithThumb = tracks.find(t => t.thumbnail);
+            const thumbnail = trackWithThumb ? trackWithThumb.thumbnail : `https://picsum.photos/seed/${title.replace(/ /g, '')}/500/500`;
+            
+            console.log(`[HOME] Rendering collection: ${title} with ${tracks.length} tracks`);
             
             const card = document.createElement('div');
             card.className = 'collection-card grid-card';
+            card.dataset.id = id;
             
             card.innerHTML = `
-                <img src="${coll.thumbnail}" class="grid-artwork" loading="lazy" alt="${coll.title}">
+                <img src="${thumbnail}" class="grid-artwork" loading="lazy" alt="${title}">
                 <div class="grid-details">
-                    <div class="grid-title">${coll.title}</div>
-                    <div class="grid-artist" style="color: var(--secondary-text); font-size: 13px;">${folderTracks.length} songs</div>
+                    <div class="grid-title">${title}</div>
+                    <div class="grid-artist" style="color: var(--secondary-text); font-size: 13px;">${tracks.length} songs</div>
                 </div>
             `;
             
             card.addEventListener('click', () => {
                 const searchInput = document.getElementById('search-input');
-                if (searchInput) searchInput.value = coll.title;
+                if (searchInput) searchInput.value = title;
                 window.uiManager.showPage('search');
-                window.uiManager.renderTrackList(folderTracks, 'search-results', "No results found for '" + coll.title + "'");
+                window.uiManager.renderTrackList(tracks, 'search-results', "No results found for '" + title + "'");
             });
             
             container.appendChild(card);
