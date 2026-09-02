@@ -40,59 +40,57 @@ class OfflineManagerClass {
     }
 
     async isDownloaded(trackId) {
-        if (!this.offlineTracks[trackId]) return false;
-        
-        // Optionally verify file exists if we are in Capacitor
-        if (this.Filesystem && this.Directory) {
-            try {
-                const path = this.offlineTracks[trackId].localPath;
-                await this.Filesystem.stat({
-                    path: path,
-                    directory: this.Directory.Data
-                });
-                return true;
-            } catch (e) {
-                // File missing on disk despite metadata
-                console.warn("Track metadata exists but file is missing:", trackId);
-                delete this.offlineTracks[trackId];
-                this.saveMetadata();
-                return false;
-            }
+        const track = this.offlineTracks[trackId];
+
+        if (!track || !track.localPath) {
+            return false;
         }
-        
-        return true;
+
+        if (!this.Filesystem || !this.Directory) {
+            return false;
+        }
+
+        try {
+            await this.Filesystem.stat({
+                path: track.localPath,
+                directory: this.Directory.Data
+            });
+
+            return true;
+        } catch (e) {
+            console.warn("[OFFLINE] Downloaded file is missing:", trackId);
+
+            delete this.offlineTracks[trackId];
+            this.saveMetadata();
+
+            return false;
+        }
     }
 
     async getLocalUrls(trackId) {
         if (!this.offlineTracks[trackId]) return null;
+
         const track = this.offlineTracks[trackId];
-        
-        if (track.nativeUrl && track.webViewUrl) {
-            return {
-                nativeUrl: track.nativeUrl,
-                webViewUrl: track.webViewUrl
-            };
-        }
-        
         const path = track.localPath;
-        
-        if (this.Filesystem && this.Directory) {
-            try {
-                const uriResult = await this.Filesystem.getUri({
-                    path: path,
-                    directory: this.Directory.Data
-                });
-                return {
-                    nativeUrl: uriResult.uri,
-                    webViewUrl: Capacitor.convertFileSrc(uriResult.uri)
-                };
-            } catch (e) {
-                console.error("Failed to get local URI", e);
-                return null;
-            }
+
+        if (!path || !this.Filesystem || !this.Directory) {
+            return null;
         }
-        
-        return null;
+
+        try {
+            const uriResult = await this.Filesystem.getUri({
+                path: path,
+                directory: this.Directory.Data
+            });
+
+            return {
+                nativeUrl: uriResult.uri,
+                webViewUrl: Capacitor.convertFileSrc(uriResult.uri)
+            };
+        } catch (e) {
+            console.error("[OFFLINE] Failed to resolve local URI:", e);
+            return null;
+        }
     }
 
     getLocalTrack(trackId) {

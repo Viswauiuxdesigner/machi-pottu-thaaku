@@ -5,7 +5,7 @@
 
 class UIManager {
     constructor() {
-        this.pages = ['home', 'search', 'saved', 'favorites', 'recent', 'storage'];
+        this.pages = ['home', 'search', 'saved', 'favorites', 'recent', 'downloads', 'storage'];
     }
 
     showPage(pageId) {
@@ -209,8 +209,8 @@ class UIManager {
                         dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--primary-color)"></i>`;
                         window.uiManager.showNotification('Song downloaded', 'success');
                         
-                        if (document.getElementById('page-downloads') && document.getElementById('page-downloads').classList.contains('active') && window.app && window.app.loadDownloads) {
-                            window.app.loadDownloads();
+                        if (window.app && window.app.loadDownloads) {
+                            window.uiManager.showPage('downloads');
                         }
                     } catch (err) {
                         dlBtn.innerHTML = `<i data-lucide="download"></i>`;
