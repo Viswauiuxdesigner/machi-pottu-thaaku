@@ -59,7 +59,7 @@ class AudioPlayer {
     setupAudioEvents() {
         this.audio.addEventListener('play', () => this.syncUIState(true));
         this.audio.addEventListener('pause', () => this.syncUIState(false));
-        this.audio.addEventListener('ended', () => this.playNext(true, this.playRequestId));
+        this.audio.addEventListener('ended', () => this.handleTrackEnded());
         
         this.audio.addEventListener('timeupdate', () => {
             this.updateProgress(this.audio.currentTime, this.audio.duration);
@@ -83,13 +83,13 @@ class AudioPlayer {
                 else this.syncUIState(false);
             });
             NativeAudio.addListener('onAudioEnd', () => {
-                this.playNext(true, this.playRequestId);
+                this.handleTrackEnded();
             });
-            NativeAudio.addListener('onNext', () => {
+            NativeAudio.addListener('nativeMediaNext', () => {
                 console.log("[NATIVE AUDIO] Lock-screen Next clicked");
                 this.playNext();
             });
-            NativeAudio.addListener('onPrevious', () => {
+            NativeAudio.addListener('nativeMediaPrevious', () => {
                 console.log("[NATIVE AUDIO] Lock-screen Previous clicked");
                 this.playPrev();
             });
@@ -151,6 +151,7 @@ class AudioPlayer {
         }
 
         this.currentTrack = track;
+        this.trackLoadTime = Date.now();
         
         // Anti-race mechanism
         this.playRequestId++;
@@ -164,12 +165,17 @@ class AudioPlayer {
         }
         
         // Update Queue
-        if (queueList.length > 0) {
+        if (queueList && queueList.length > 0) {
             this.queue = queueList;
             this.queueIndex = index;
-        } else if (this.queue.length === 0) {
-            this.queue = [track];
-            this.queueIndex = 0;
+        } else {
+            const existingIdx = this.queue.findIndex(t => t.id === track.id);
+            if (existingIdx !== -1) {
+                this.queueIndex = existingIdx;
+            } else {
+                this.queue = [track];
+                this.queueIndex = 0;
+            }
         }
 
         this.updateUI();
@@ -302,24 +308,43 @@ class AudioPlayer {
         }
     }
 
-    playNext(autoSkip = false, reqId = null) {
-        if (autoSkip && reqId !== null && reqId !== this.playRequestId) {
-            console.log("[PLAYER] Ignoring stale onAudioEnd event for old playRequest");
+    handleTrackEnded() {
+        const now = Date.now();
+        
+        // Prevent duplicate events within 1 second of each other
+        if (this.lastEndEventTime && now - this.lastEndEventTime < 1000) {
+            console.log("[PLAYER] Debouncing duplicate ended event");
+            return;
+        }
+        this.lastEndEventTime = now;
+
+        // Prevent stale events from previous track or broken tracks that end immediately
+        if (this.trackLoadTime && now - this.trackLoadTime < 1000) {
+            console.log("[PLAYER] Ignoring stale/immediate end event");
             return;
         }
 
+        console.log("[PLAYER] Track genuinely ended, auto-skipping to next");
+        
         if (this.queueIndex >= 0 && this.queueIndex < this.queue.length - 1) {
             this.queueIndex++;
             this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
         } else {
             // End of queue
-            if (!autoSkip) {
-                if (!Capacitor.isNativePlatform() && this.audio) {
-                    this.audio.pause();
-                    this.audio.currentTime = 0;
-                }
+            if (!Capacitor.isNativePlatform() && this.audio) {
+                this.audio.pause();
+                this.audio.currentTime = 0;
             }
             this.syncUIState(false);
+        }
+    }
+
+    playNext() {
+        if (this.queueIndex >= 0 && this.queueIndex < this.queue.length - 1) {
+            this.queueIndex++;
+            this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
+        } else {
+            console.log("[PLAYER] End of queue reached, safely doing nothing");
         }
     }
 
