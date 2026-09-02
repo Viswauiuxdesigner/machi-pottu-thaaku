@@ -1,216 +1,118 @@
 name: Build Android APK
 
 on:
-  push:
-    branches: [ "main" ]
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
+    defaults:
+      run:
+        working-directory: Machi Pottu Thakku
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Detect PROJECT_DIR
-      run: |
-        PROJECT_DIR=$(find . -name "package.json" -not -path "*/node_modules/*" -exec dirname {} \; | head -n 1)
-        if [ -z "$PROJECT_DIR" ]; then
-          echo "ERROR: package.json not found."
-          exit 1
-        fi
-        echo "Found project directory: $PROJECT_DIR"
-        echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-        
-    - name: Set up Node.js 22
-      uses: actions/setup-node@v4
-      with:
-        node-version: '22'
-        
-    - name: Set up Java 21
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'zulu'
-        java-version: '21'
-        
-    - name: Verify package.json
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        if [ ! -f "package.json" ]; then
-          echo "ERROR: package.json missing in $PROJECT_DIR"
-          exit 1
-        fi
-        
-    - name: Install dependencies
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: npm install
-      
-    - name: Build Web App
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: npm run build
-      
-    - name: Capacitor Add Android
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: npx cap add android || echo "Android already added"
-      
-    - name: Apply Custom NativeAudio Java
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        CUSTOM_SRC="package/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio"
-        NODE_SRC="node_modules/@mediagrid/capacitor-native-audio/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio"
-        
-        echo "Source: $CUSTOM_SRC"
-        echo "Target: $NODE_SRC"
-        
-        if [ ! -f "$CUSTOM_SRC/AudioPlayerPlugin.java" ] || [ ! -f "$CUSTOM_SRC/AudioSource.java" ] || [ ! -f "$CUSTOM_SRC/AudioPlayerService.java" ]; then
-          echo "ERROR: Custom Java files not found in source directory."
-          exit 1
-        fi
-        
-        mkdir -p "$NODE_SRC"
-        
-        cp "$CUSTOM_SRC/AudioPlayerPlugin.java" "$NODE_SRC/"
-        cp "$CUSTOM_SRC/AudioSource.java" "$NODE_SRC/"
-        cp "$CUSTOM_SRC/AudioPlayerService.java" "$NODE_SRC/"
-        
-        if [ ! -f "$NODE_SRC/AudioPlayerPlugin.java" ] || [ ! -f "$NODE_SRC/AudioSource.java" ] || [ ! -f "$NODE_SRC/AudioPlayerService.java" ]; then
-          echo "ERROR: Copied files missing from destination directory."
-          exit 1
-        fi
-        
-        grep -q "emitNextEvent" "$NODE_SRC/AudioPlayerPlugin.java" || { echo "Missing emitNextEvent"; exit 1; }
-        grep -q "emitPreviousEvent" "$NODE_SRC/AudioPlayerPlugin.java" || { echo "Missing emitPreviousEvent"; exit 1; }
-        grep -q "emitNext" "$NODE_SRC/AudioSource.java" || { echo "Missing emitNext"; exit 1; }
-        grep -q "emitPrevious" "$NODE_SRC/AudioSource.java" || { echo "Missing emitPrevious"; exit 1; }
-        grep -q "ForwardingPlayer" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing ForwardingPlayer"; exit 1; }
-        grep -q "COMMAND_SEEK_TO_NEXT" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing COMMAND_SEEK_TO_NEXT"; exit 1; }
-        grep -q "COMMAND_SEEK_TO_PREVIOUS" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing COMMAND_SEEK_TO_PREVIOUS"; exit 1; }
-        grep -q "seekToNext" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing seekToNext"; exit 1; }
-        grep -q "seekToPrevious" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing seekToPrevious"; exit 1; }
-        
-        echo "Successfully copied and verified custom Java implementation."
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Capacitor Sync
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: npx cap sync android
-      
-    - name: Diagnose Lock-screen Next/Previous
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        NODE_SRC="node_modules/@mediagrid/capacitor-native-audio/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio"
-        
-        echo "CHECKED PLUGIN PATH"
-        echo "$NODE_SRC"
-        
-        [ -f "$NODE_SRC/AudioPlayerPlugin.java" ] && HAS_PLUGIN="YES" || HAS_PLUGIN="NO"
-        [ -f "$NODE_SRC/AudioSource.java" ] && HAS_SOURCE="YES" || HAS_SOURCE="NO"
-        [ -f "$NODE_SRC/AudioPlayerService.java" ] && HAS_SERVICE="YES" || HAS_SERVICE="NO"
-        
-        echo "AudioPlayerPlugin.java: $HAS_PLUGIN"
-        echo "AudioSource.java: $HAS_SOURCE"
-        echo "AudioPlayerService.java: $HAS_SERVICE"
-        
-        if [ "$HAS_SERVICE" = "YES" ]; then
-          grep -q "ForwardingPlayer" "$NODE_SRC/AudioPlayerService.java" && HAS_FWD="YES" || HAS_FWD="NO"
-          grep -q "COMMAND_SEEK_TO_NEXT" "$NODE_SRC/AudioPlayerService.java" && HAS_CMD_NEXT="YES" || HAS_CMD_NEXT="NO"
-          grep -q "COMMAND_SEEK_TO_PREVIOUS" "$NODE_SRC/AudioPlayerService.java" && HAS_CMD_PREV="YES" || HAS_CMD_PREV="NO"
-          grep -q "seekToNext" "$NODE_SRC/AudioPlayerService.java" && HAS_SEEK_NEXT="YES" || HAS_SEEK_NEXT="NO"
-          grep -q "seekToPrevious" "$NODE_SRC/AudioPlayerService.java" && HAS_SEEK_PREV="YES" || HAS_SEEK_PREV="NO"
-        else
-          HAS_FWD="NO"
-          HAS_CMD_NEXT="NO"
-          HAS_CMD_PREV="NO"
-          HAS_SEEK_NEXT="NO"
-          HAS_SEEK_PREV="NO"
-        fi
-        
-        if [ "$HAS_PLUGIN" = "YES" ]; then
-          grep -q "emitNextEvent" "$NODE_SRC/AudioPlayerPlugin.java" && HAS_EMIT_NEXT_EVT="YES" || HAS_EMIT_NEXT_EVT="NO"
-          grep -q "emitPreviousEvent" "$NODE_SRC/AudioPlayerPlugin.java" && HAS_EMIT_PREV_EVT="YES" || HAS_EMIT_PREV_EVT="NO"
-        else
-          HAS_EMIT_NEXT_EVT="NO"
-          HAS_EMIT_PREV_EVT="NO"
-        fi
-        
-        if [ "$HAS_SOURCE" = "YES" ]; then
-          grep -q "emitNext" "$NODE_SRC/AudioSource.java" && HAS_EMIT_NEXT="YES" || HAS_EMIT_NEXT="NO"
-          grep -q "emitPrevious" "$NODE_SRC/AudioSource.java" && HAS_EMIT_PREV="YES" || HAS_EMIT_PREV="NO"
-        else
-          HAS_EMIT_NEXT="NO"
-          HAS_EMIT_PREV="NO"
-        fi
-        
-        echo "ForwardingPlayer: $HAS_FWD"
-        echo "COMMAND_SEEK_TO_NEXT: $HAS_CMD_NEXT"
-        echo "COMMAND_SEEK_TO_PREVIOUS: $HAS_CMD_PREV"
-        echo "seekToNext: $HAS_SEEK_NEXT"
-        echo "seekToPrevious: $HAS_SEEK_PREV"
-        echo "emitNextEvent: $HAS_EMIT_NEXT_EVT"
-        echo "emitPreviousEvent: $HAS_EMIT_PREV_EVT"
-        echo "emitNext: $HAS_EMIT_NEXT"
-        echo "emitPrevious: $HAS_EMIT_PREV"
-        
-        if [ "$HAS_CMD_NEXT" = "YES" ] && [ "$HAS_FWD" = "YES" ] && [ "$HAS_PLUGIN" = "YES" ] && [ "$HAS_SOURCE" = "YES" ] && [ "$HAS_SEEK_NEXT" = "YES" ] && [ "$HAS_EMIT_NEXT" = "YES" ] && [ "$HAS_EMIT_NEXT_EVT" = "YES" ]; then
-          NATIVE_NEXT="YES"
-        else
-          NATIVE_NEXT="NO"
-        fi
-        
-        if [ "$HAS_CMD_PREV" = "YES" ] && [ "$HAS_FWD" = "YES" ] && [ "$HAS_PLUGIN" = "YES" ] && [ "$HAS_SOURCE" = "YES" ] && [ "$HAS_SEEK_PREV" = "YES" ] && [ "$HAS_EMIT_PREV" = "YES" ] && [ "$HAS_EMIT_PREV_EVT" = "YES" ]; then
-          NATIVE_PREVIOUS="YES"
-        else
-          NATIVE_PREVIOUS="NO"
-        fi
-        
-        echo "NATIVE_NEXT=$NATIVE_NEXT" >> $GITHUB_ENV
-        echo "NATIVE_PREVIOUS=$NATIVE_PREVIOUS" >> $GITHUB_ENV
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: Machi Pottu Thakku/package-lock.json
 
-    - name: Generate Android Icons
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        if [ ! -f "assets/icon.png" ]; then
-          echo "ERROR: assets/icon.png not found. Cannot generate launcher icons."
-          echo "LAUNCHER_ICONS=FAIL" >> $GITHUB_ENV
-          exit 1
-        fi
-        npm install -g @capacitor/assets
-        npx @capacitor/assets generate --android
-        
-        if [ ! -d "android/app/src/main/res/mipmap-mdpi" ]; then
-          echo "ERROR: Android launcher icon resources were not generated properly by Capacitor Assets."
-          echo "LAUNCHER_ICONS=FAIL" >> $GITHUB_ENV
-          exit 1
-        fi
-        echo "LAUNCHER_ICONS=PASS" >> $GITHUB_ENV
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
 
-    - name: Build APK (Clean & AssembleDebug)
-      working-directory: ${{ env.PROJECT_DIR }}/android
-      run: |
-        ./gradlew clean
-        ./gradlew assembleDebug --stacktrace
-        
-    - name: Verify APK Exists
-      working-directory: ${{ env.PROJECT_DIR }}
-      run: |
-        if [ ! -f "android/app/build/outputs/apk/debug/app-debug.apk" ]; then
-          echo "APK build failed, artifact not found!"
-          echo "APK_BUILD=FAIL" >> $GITHUB_ENV
-          exit 1
-        fi
-        echo "APK_BUILD=PASS" >> $GITHUB_ENV
-        echo "APK successfully built."
-        
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-debug
-        path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
-        
-    - name: CI Summary
-      if: always()
-      run: |
-        echo "### Android CI Build Summary" >> $GITHUB_STEP_SUMMARY
-        echo "- Lock-screen Next | ${NATIVE_NEXT:-NO}" >> $GITHUB_STEP_SUMMARY
-        echo "- Lock-screen Previous | ${NATIVE_PREVIOUS:-NO}" >> $GITHUB_STEP_SUMMARY
-        echo "- Launcher Icons | ${LAUNCHER_ICONS:-FAIL}" >> $GITHUB_STEP_SUMMARY
-        echo "- APK Build | ${APK_BUILD:-FAIL}" >> $GITHUB_STEP_SUMMARY
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Web App
+        run: npm run build
+
+      - name: Add Android platform
+        run: |
+          if [ -d "android" ]; then
+            echo "Android project already exists."
+          else
+            npx cap add android
+          fi
+
+      - name: Apply Custom NativeAudio Java
+        run: |
+          SOURCE="package/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio"
+          TARGET="node_modules/@mediagrid/capacitor-native-audio/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio"
+
+          echo "Checking custom NativeAudio source..."
+
+          test -f "$SOURCE/AudioPlayerPlugin.java"
+          test -f "$SOURCE/AudioPlayerService.java"
+          test -f "$SOURCE/AudioSource.java"
+
+          mkdir -p "$TARGET"
+
+          cp "$SOURCE/AudioPlayerPlugin.java" "$TARGET/AudioPlayerPlugin.java"
+          cp "$SOURCE/AudioPlayerService.java" "$TARGET/AudioPlayerService.java"
+          cp "$SOURCE/AudioSource.java" "$TARGET/AudioSource.java"
+
+          echo "Custom NativeAudio Java files copied."
+
+      - name: Verify NativeAudio changes
+        run: |
+          TARGET="node_modules/@mediagrid/capacitor-native-audio/android/src/main/java/us/mediagrid/capacitorjs/plugins/nativeaudio"
+
+          echo "Checking AudioPlayerPlugin.java..."
+          grep -q "emitNextEvent" "$TARGET/AudioPlayerPlugin.java"
+          grep -q "emitPreviousEvent" "$TARGET/AudioPlayerPlugin.java"
+
+          echo "Checking AudioSource.java..."
+          grep -q "emitNext" "$TARGET/AudioSource.java"
+          grep -q "emitPrevious" "$TARGET/AudioSource.java"
+
+          echo "Checking AudioPlayerService.java..."
+          grep -q "ForwardingPlayer" "$TARGET/AudioPlayerService.java"
+          grep -q "COMMAND_SEEK_TO_NEXT" "$TARGET/AudioPlayerService.java"
+          grep -q "COMMAND_SEEK_TO_PREVIOUS" "$TARGET/AudioPlayerService.java"
+          grep -q "seekToNext" "$TARGET/AudioPlayerService.java"
+          grep -q "seekToPrevious" "$TARGET/AudioPlayerService.java"
+
+          echo "================================="
+          echo "NativeAudio custom changes: PASS"
+          echo "Lock-screen Next: YES"
+          echo "Lock-screen Previous: YES"
+          echo "================================="
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Verify APK
+        run: |
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ -f "$APK" ]; then
+            echo "APK Build: PASS"
+            ls -lh "$APK"
+          else
+            echo "APK Build: FAIL"
+            exit 1
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: machi-pottu-thaaku-debug-apk
+          path: Machi Pottu Thakku/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
