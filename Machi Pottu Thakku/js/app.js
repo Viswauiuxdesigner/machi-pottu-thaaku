@@ -60,10 +60,16 @@ class App {
         this.updateGreeting();
         
         // Explore Button
-        document.getElementById('btn-explore').addEventListener('click', () => {
-            window.uiManager.showPage('search');
-            document.getElementById('search-input').focus();
-        });
+        const btnExplore = document.getElementById('btn-explore');
+        if (btnExplore) {
+            btnExplore.addEventListener('click', () => {
+                window.uiManager.showPage('search');
+                const searchInput = document.getElementById('search-input');
+                if (searchInput) {
+                    searchInput.focus();
+                }
+            });
+        }
 
         // Setup Search
         this.setupSearch();
