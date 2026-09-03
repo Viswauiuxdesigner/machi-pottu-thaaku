@@ -56,7 +56,10 @@
         <!-- Main Content -->
         <main class="main-content">
             <header class="top-header">
-                <div class="greeting" id="header-greeting">Good evening, Machi 👋</div>
+                <div class="greeting-container">
+                    <div class="greeting" id="header-greeting">Good Evening, Viswa 👋</div>
+                    <div class="subtitle">Music that hits different 🎧</div>
+                </div>
                 <div class="header-actions">
                     <button id="btn-refresh-library" class="icon-btn" title="Refresh Music Library"
                         aria-label="Refresh Library"
@@ -72,16 +75,34 @@
             <div class="scroll-container">
                 <!-- Pages -->
                 <div id="page-home" class="page active">
-                    <section class="hero">
-                        <h1>Your Music. Your Way.</h1>
-                        <p>Discover, listen and save your favorite songs.</p>
-                        <button class="btn btn-primary" id="btn-explore">Explore Music</button>
+                    <section class="quick-access">
+                        <div class="quick-card card-downloads" onclick="document.querySelector('.nav-item[data-page=\'downloads\']').click()">
+                            <i data-lucide="download" class="quick-icon"></i>
+                            <div class="quick-title">Downloads</div>
+                        </div>
+                        <div class="quick-card card-favourites" onclick="document.querySelector('.nav-item[data-page=\'favorites\']').click()">
+                            <i data-lucide="heart" class="quick-icon"></i>
+                            <div class="quick-title">Favourites</div>
+                        </div>
                     </section>
 
                     <section class="collections-section">
-                        <h2>Library Collections</h2>
+                        <div class="section-header">
+                            <h2>Your Collections</h2>
+                            <a href="#" class="view-all">View All <i data-lucide="chevron-right"></i></a>
+                        </div>
                         <div class="grid-container" id="collections-grid">
                             <!-- Collections populated dynamically by app.js -->
+                        </div>
+                    </section>
+                    
+                    <section class="recently-played-section">
+                        <div class="section-header">
+                            <h2>Recently Played</h2>
+                            <a href="#" class="view-all">View All <i data-lucide="chevron-right"></i></a>
+                        </div>
+                        <div id="recently-played-list" class="track-list">
+                            <!-- Populated dynamically if supported, else empty for now -->
                         </div>
                     </section>
                 </div>
@@ -133,9 +154,20 @@
                 </div>
 
                 <div id="page-downloads" class="page">
-                    <div class="page-header">
+                    <div class="page-header downloads-header">
+                        <button class="back-btn"><i data-lucide="chevron-left"></i></button>
                         <h1>Downloads</h1>
-                        <p>Listen offline without internet.</p>
+                        <div class="header-right">
+                            <button class="icon-btn"><i data-lucide="search"></i></button>
+                            <button class="icon-btn"><i data-lucide="list-filter"></i></button>
+                        </div>
+                    </div>
+
+                    <div class="downloads-sort-header">
+                        <span id="downloads-count">Downloaded Songs (0)</span>
+                        <div class="sort-dropdown">
+                            Recently Downloaded <i data-lucide="chevron-down"></i>
+                        </div>
                     </div>
 
                     <div id="downloads-results" class="track-list">
