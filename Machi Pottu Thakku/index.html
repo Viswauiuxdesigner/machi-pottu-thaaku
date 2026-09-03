@@ -88,6 +88,16 @@
                             <!-- Collections populated dynamically by app.js -->
                         </div>
                     </section>
+
+                    <section class="machi-guess-card-section" style="margin-top: var(--spacing-4);">
+                        <div class="machi-guess-card">
+                            <div class="mg-card-info">
+                                <div class="mg-card-badge"><i data-lucide="headphones" style="width: 18px; height: 18px; margin-right: 6px;"></i> MACHI GUESS</div>
+                                <div class="mg-card-title">How well do you know your music?</div>
+                            </div>
+                            <button class="btn-play-game" onclick="window.machiGuess.openGame()">PLAY</button>
+                        </div>
+                    </section>
                     
 
                 </div>
@@ -240,6 +250,46 @@
             </div>
         </div>
 
+        <!-- MACHI GUESS Overlay -->
+        <div id="page-machi-guess" class="page-overlay">
+            <div class="mg-header">
+                <button class="icon-btn" onclick="window.machiGuess.closeGame()">
+                    <i data-lucide="chevron-down" style="color: var(--accent-color);"></i>
+                </button>
+                <div class="mg-header-titles">
+                    <div class="mg-header-title">MACHI GUESS</div>
+                    <div class="mg-header-sub">Guess the Artist</div>
+                </div>
+                <div class="mg-score-badge">SCORE <span id="mg-score-val">0</span></div>
+            </div>
+
+            <div id="mg-empty-state" class="mg-empty-state" style="display: none;">
+                Not enough artists to start this game.
+            </div>
+
+            <div id="mg-game-content" class="mg-game-content">
+                <div class="mg-artwork-container">
+                    <div id="mg-artwork" class="mg-artwork">
+                        <i data-lucide="headphones" style="width: 64px; height: 64px; color: var(--accent-color);"></i>
+                    </div>
+                </div>
+
+                <div id="mg-prompt" class="mg-prompt">Listen carefully...</div>
+
+                <div id="mg-choices-container" class="mg-choices-grid">
+                    <!-- Dynamic Choice Buttons -->
+                </div>
+
+                <div id="mg-result" class="mg-result" style="display: none;"></div>
+
+                <div class="mg-actions">
+                    <button id="mg-btn-next" class="btn-mg-next" style="display: none;" onclick="window.machiGuess.startRound()">
+                        NEXT SONG <i data-lucide="chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Native HTML5 Audio Element -->
         <audio id="main-audio" preload="metadata"></audio>
     </div>
@@ -250,6 +300,7 @@
     <script type="module" src="/js/player.js"></script>
     <script type="module" src="/js/ui.js"></script>
     <script type="module" src="/js/app.js"></script>
+    <script type="module" src="/js/machi-guess.js"></script>
 </body>
 
 </html>
