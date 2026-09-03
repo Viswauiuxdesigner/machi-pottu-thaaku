@@ -1253,3 +1253,206 @@ body {
 .np-controls .control-btn {
     padding: var(--spacing-2);
 }
+
+/* MACHI GUESS Home Card */
+.machi-guess-card-section {
+    margin-bottom: var(--spacing-4);
+}
+
+.machi-guess-card {
+    background: linear-gradient(135deg, #181818 0%, #111111 100%);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-3);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+}
+
+.mg-card-badge {
+    display: inline-flex;
+    align-items: center;
+    color: var(--accent-color);
+    font-weight: 800;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.mg-card-title {
+    color: var(--secondary-text);
+    font-size: 13px;
+}
+
+.btn-play-game {
+    background: var(--accent-color);
+    color: #ffffff;
+    border: none;
+    padding: 10px 22px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    transition: transform 0.2s ease, background-color 0.2s ease;
+    box-shadow: 0 4px 12px rgba(255, 107, 0, 0.3);
+}
+
+.btn-play-game:active {
+    transform: scale(0.95);
+    background-color: var(--accent-hover);
+}
+
+/* MACHI GUESS Overlay */
+.mg-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-3);
+    padding-top: env(safe-area-inset-top, 10px);
+}
+
+.mg-header-titles {
+    text-align: center;
+}
+
+.mg-header-title {
+    color: var(--accent-color);
+    font-weight: 800;
+    font-size: 18px;
+    letter-spacing: 0.5px;
+}
+
+.mg-header-sub {
+    color: var(--secondary-text);
+    font-size: 12px;
+}
+
+.mg-score-badge {
+    background-color: var(--elevated-surface);
+    border: 1px solid var(--border-color);
+    color: var(--accent-color);
+    font-weight: 700;
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 12px;
+}
+
+.mg-game-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.mg-artwork-container {
+    margin-top: var(--spacing-2);
+    margin-bottom: var(--spacing-3);
+}
+
+.mg-artwork {
+    width: 220px;
+    height: 220px;
+    border-radius: var(--radius-lg);
+    background-color: var(--elevated-surface);
+    border: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+}
+
+.mg-prompt {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--primary-text);
+    margin-bottom: var(--spacing-4);
+    text-align: center;
+    padding: 0 var(--spacing-2);
+}
+
+.mg-choices-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--spacing-2);
+    width: 100%;
+    max-width: 400px;
+    margin-bottom: var(--spacing-3);
+}
+
+.mg-choice-btn {
+    background-color: var(--elevated-surface);
+    color: var(--primary-text);
+    border: 1px solid var(--border-color);
+    padding: 14px 18px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+}
+
+.mg-choice-btn:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.mg-choice-btn.correct {
+    background-color: rgba(46, 125, 50, 0.3) !important;
+    border-color: #4caf50 !important;
+    color: #81c784 !important;
+}
+
+.mg-choice-btn.wrong {
+    background-color: rgba(198, 40, 40, 0.3) !important;
+    border-color: #ef5350 !important;
+    color: #e57373 !important;
+}
+
+.mg-result {
+    width: 100%;
+    max-width: 400px;
+    padding: 12px;
+    border-radius: var(--radius-md);
+    text-align: center;
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: var(--spacing-3);
+}
+
+.mg-result.success {
+    background-color: rgba(46, 125, 50, 0.2);
+    border: 1px solid #4caf50;
+    color: #81c784;
+}
+
+.mg-result.failure {
+    background-color: rgba(198, 40, 40, 0.2);
+    border: 1px solid #ef5350;
+    color: #e57373;
+}
+
+.btn-mg-next {
+    background: var(--accent-color);
+    color: #ffffff;
+    border: none;
+    padding: 12px 28px;
+    border-radius: 24px;
+    font-weight: 700;
+    font-size: 15px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    box-shadow: 0 4px 15px rgba(255, 107, 0, 0.4);
+}
+
+.mg-empty-state {
+    text-align: center;
+    color: var(--secondary-text);
+    padding: var(--spacing-4);
+    font-size: 15px;
+}
+
