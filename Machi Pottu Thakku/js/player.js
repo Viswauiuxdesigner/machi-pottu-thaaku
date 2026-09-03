@@ -192,6 +192,10 @@ class AudioPlayer {
                         finalUrl = localUrls.webViewUrl;
                     }
                 }
+            } else if (track._prefetchedUrl) {
+                console.log("[FILEBASE PLAYBACK] Using prefetched signed URL");
+                finalUrl = track._prefetchedUrl;
+                track._prefetchedUrl = null; // Clear it so it doesn't get stale if played again later
             }
             
             if (!finalUrl) {
@@ -282,6 +286,10 @@ class AudioPlayer {
                     console.error("Autoplay prevented:", err);
                 });
             }
+            
+            // Prefetch next track to avoid gap
+            this.prefetchNextTrack();
+            
         } catch (error) {
             console.error("[FILEBASE PLAYBACK] Error fetching presigned URL or creating player:", error);
             window.uiManager.showNotification("Playback failed: " + error.message, "error");
@@ -350,6 +358,34 @@ class AudioPlayer {
             this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
         } else {
             console.log("[PLAYER] End of queue reached, safely doing nothing");
+        }
+    }
+
+    async prefetchNextTrack() {
+        if (this.queueIndex >= 0 && this.queueIndex < this.queue.length - 1) {
+            const nextTrack = this.queue[this.queueIndex + 1];
+            if (!nextTrack) return;
+            
+            let isOfflineTrack = false;
+            if (window.OfflineManager) {
+                isOfflineTrack = await window.OfflineManager.isDownloaded(nextTrack.id);
+            }
+            
+            if (!isOfflineTrack && navigator.onLine && !nextTrack._prefetchedUrl) {
+                try {
+                    const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(nextTrack.s3Key)}`);
+                    const response = await fetch(requestUrl);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.url) {
+                            nextTrack._prefetchedUrl = data.url;
+                            console.log(`[PREFETCH] Prefetched URL for next track: ${nextTrack.title}`);
+                        }
+                    }
+                } catch (e) {
+                    console.error("[PREFETCH] Failed to prefetch next track", e);
+                }
+            }
         }
     }
 
