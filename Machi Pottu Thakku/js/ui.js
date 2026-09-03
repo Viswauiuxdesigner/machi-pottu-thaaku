@@ -105,7 +105,7 @@ class UIManager {
         }
     }
 
-    async createTrackRow(track, queueList, index) {
+    async createTrackRow(track, queueList, index, isDownloadsView = false) {
         const isFav = window.storageManager.isFavorite(track.id);
         
         const row = document.createElement('div');
@@ -116,13 +116,19 @@ class UIManager {
             `<img src="${track.thumbnail}" class="track-artwork" loading="lazy">` : 
             `<div class="track-artwork placeholder"><i data-lucide="music"></i></div>`;
             
-        row.innerHTML = `
-            ${artworkHtml}
-            <div class="track-info">
-                <div class="track-title">${track.title}</div>
-                <div class="track-artist">${track.artist}</div>
-            </div>
-            <div class="track-actions">
+        let actionsHtml = '';
+        if (isDownloadsView) {
+            actionsHtml = `
+                <span class="track-duration">${this.formatDuration(track.duration)}</span>
+                <button class="icon-btn action-play" aria-label="Play" data-video-id="${track.videoId || ''}">
+                    <i data-lucide="play"></i>
+                </button>
+                <button class="icon-btn action-delete-dl" title="Delete Download" aria-label="Delete Download" style="color: var(--primary-color);">
+                    <i data-lucide="trash-2"></i>
+                </button>
+            `;
+        } else {
+            actionsHtml = `
                 <button class="icon-btn action-fav ${isFav ? 'active' : ''}" title="Favorite" aria-label="Favorite">
                     <i data-lucide="heart" ${isFav ? 'fill="currentColor"' : ''}></i>
                 </button>
@@ -135,6 +141,17 @@ class UIManager {
                 <button class="icon-btn action-play" aria-label="Play" data-video-id="${track.videoId || ''}">
                     <i data-lucide="play"></i>
                 </button>
+            `;
+        }
+            
+        row.innerHTML = `
+            ${artworkHtml}
+            <div class="track-info">
+                <div class="track-title">${track.title}</div>
+                <div class="track-artist">${track.artist}</div>
+            </div>
+            <div class="track-actions">
+                ${actionsHtml}
             </div>
         `;
         
@@ -152,79 +169,96 @@ class UIManager {
             window.player.playTrack(track, queueList, index);
         });
         
-        // Favorite action
         const favBtn = row.querySelector('.action-fav');
-        favBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const added = window.storageManager.toggleFavorite(track);
-            favBtn.classList.toggle('active', added);
-            const icon = favBtn.querySelector('i');
-            if (added) icon.setAttribute('fill', 'currentColor');
-            else icon.removeAttribute('fill');
-        });
+        if (favBtn) {
+            favBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const added = window.storageManager.toggleFavorite(track);
+                favBtn.classList.toggle('active', added);
+                const icon = favBtn.querySelector('i');
+                if (added) icon.setAttribute('fill', 'currentColor');
+                else icon.removeAttribute('fill');
+            });
+        }
         
         const durationSpan = row.querySelector('.track-duration');
         if (!track.duration) {
             this.loadTrackMetadata(track, durationSpan);
         }
         
-        const dlBtn = row.querySelector('.action-download');
-        
-        // Initial state
-        if (window.OfflineManager) {
-            window.OfflineManager.isDownloaded(track.id).then(isDl => {
-                if (isDl) {
-                    dlBtn.classList.add('active');
-                    dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--primary-color)"></i>`;
-                    if (window.lucide) lucide.createIcons({root: dlBtn});
-                }
-            });
-            
-            dlBtn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                
-                const isDl = await window.OfflineManager.isDownloaded(track.id);
-                
-                if (isDl) {
-                    // Delete
-                    if (confirm('Remove from downloads?')) {
+        if (isDownloadsView) {
+            const delBtn = row.querySelector('.action-delete-dl');
+            if (delBtn && window.OfflineManager) {
+                delBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    if (confirm('Delete this download?')) {
                         await window.OfflineManager.deleteTrack(track.id);
-                        dlBtn.classList.remove('active');
-                        dlBtn.innerHTML = `<i data-lucide="download"></i>`;
-                        if (window.lucide) lucide.createIcons({root: dlBtn});
-                        
-                        // If we are on the downloads page, refresh
-                        if (document.getElementById('page-downloads').classList.contains('active') && window.app.loadDownloads) {
+                        if (window.app && window.app.loadDownloads) {
                             window.app.loadDownloads();
                         }
                     }
-                } else {
-                    // Download
-                    dlBtn.innerHTML = `<i data-lucide="loader" class="spin"></i>`;
-                    if (window.lucide) lucide.createIcons({root: dlBtn});
-                    
-                    try {
-                        await window.OfflineManager.downloadTrack(track);
+                });
+            }
+        } else {
+            const dlBtn = row.querySelector('.action-download');
+            
+            // Initial state
+            if (dlBtn && window.OfflineManager) {
+                window.OfflineManager.isDownloaded(track.id).then(isDl => {
+                    if (isDl) {
                         dlBtn.classList.add('active');
                         dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--primary-color)"></i>`;
-                        window.uiManager.showNotification('Song downloaded', 'success');
-                        
-                        if (window.app && window.app.loadDownloads) {
-                            window.uiManager.showPage('downloads');
-                        }
-                    } catch (err) {
-                        dlBtn.innerHTML = `<i data-lucide="download"></i>`;
-                        window.uiManager.showNotification('Download failed: ' + err.message, 'error');
+                        if (window.lucide) lucide.createIcons({root: dlBtn});
                     }
-                    if (window.lucide) lucide.createIcons({root: dlBtn});
-                }
-            });
+                });
+                
+                dlBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    
+                    const isDl = await window.OfflineManager.isDownloaded(track.id);
+                    
+                    if (isDl) {
+                        // Delete
+                        if (confirm('Remove from downloads?')) {
+                            await window.OfflineManager.deleteTrack(track.id);
+                            dlBtn.classList.remove('active');
+                            dlBtn.innerHTML = `<i data-lucide="download"></i>`;
+                            if (window.lucide) lucide.createIcons({root: dlBtn});
+                            
+                            // If we are on the downloads page, refresh
+                            if (document.getElementById('page-downloads').classList.contains('active') && window.app.loadDownloads) {
+                                window.app.loadDownloads();
+                            }
+                        }
+                    } else {
+                        // Download
+                        dlBtn.innerHTML = `<i data-lucide="loader" class="spin"></i>`;
+                        if (window.lucide) lucide.createIcons({root: dlBtn});
+                        
+                        try {
+                            await window.OfflineManager.downloadTrack(track);
+                            dlBtn.classList.add('active');
+                            dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--primary-color)"></i>`;
+                            window.uiManager.showNotification('Song downloaded', 'success');
+                            
+                            if (window.app && window.app.loadDownloads) {
+                                window.uiManager.showPage('downloads');
+                            }
+                        } catch (err) {
+                            dlBtn.innerHTML = `<i data-lucide="download"></i>`;
+                            window.uiManager.showNotification('Download failed: ' + err.message, 'error');
+                        }
+                        if (window.lucide) lucide.createIcons({root: dlBtn});
+                    }
+                });
+            }
         }
         
         return row;
     }
     
     async renderTrackList(tracks, containerId, emptyMessage = "No tracks found.") {
+        const isDownloadsView = (containerId === 'downloads-results');
         const container = document.getElementById(containerId);
         if (!container) return;
         
@@ -242,7 +276,7 @@ class UIManager {
         }
         
         for (let i = 0; i < tracks.length; i++) {
-            const row = await this.createTrackRow(tracks[i], tracks, i);
+            const row = await this.createTrackRow(tracks[i], tracks, i, isDownloadsView);
             container.appendChild(row);
         }
         

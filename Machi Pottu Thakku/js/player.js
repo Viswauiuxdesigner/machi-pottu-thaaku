@@ -78,13 +78,6 @@ class AudioPlayer {
         // Setup NativeAudio Listener if running natively
         if (Capacitor.isNativePlatform()) {
             // Register exactly once before initialize
-            NativeAudio.addListener('onPlaybackStatusChange', (result) => {
-                if (result.status === 'playing') this.syncUIState(true);
-                else this.syncUIState(false);
-            });
-            NativeAudio.addListener('onAudioEnd', () => {
-                this.handleTrackEnded();
-            });
             NativeAudio.addListener('nativeMediaNext', () => {
                 console.log("[NATIVE AUDIO] Lock-screen Next clicked");
                 this.playNext();
@@ -92,9 +85,6 @@ class AudioPlayer {
             NativeAudio.addListener('nativeMediaPrevious', () => {
                 console.log("[NATIVE AUDIO] Lock-screen Previous clicked");
                 this.playPrev();
-            });
-            NativeAudio.addListener('onAudioReady', () => {
-                this.nativeReady = true;
             });
             
             // Periodically sync progress from native audio
@@ -247,6 +237,21 @@ class AudioPlayer {
                     if (res && res.success === false) throw new Error("Failed to create NativeAudio");
                     this.nativeInitialized = true;
                     this.currentNativeSource = finalUrl;
+                    
+                    if (!this.nativeCallbacksRegistered) {
+                        console.log("[NATIVE AUDIO] Registering lifecycle callbacks for 'main' source");
+                        NativeAudio.onPlaybackStatusChange({ audioId: 'main' }, (result) => {
+                            if (result.status === 'playing') this.syncUIState(true);
+                            else this.syncUIState(false);
+                        });
+                        NativeAudio.onAudioEnd({ audioId: 'main' }, () => {
+                            this.handleTrackEnded();
+                        });
+                        NativeAudio.onAudioReady({ audioId: 'main' }, () => {
+                            this.nativeReady = true;
+                        });
+                        this.nativeCallbacksRegistered = true;
+                    }
                     
                     console.log("[NATIVE AUDIO] initialize player");
                     await NativeAudio.initialize({ audioId: 'main' });
