@@ -46,10 +46,7 @@ class AudioPlayer {
         const progressContainer = document.getElementById('progress-container');
         if (progressContainer) {
             progressContainer.addEventListener('click', (e) => {
-                if (!this.audio || !this.audio.duration || isNaN(this.audio.duration)) return;
-                const rect = progressContainer.getBoundingClientRect();
-                const pos = (e.clientX - rect.left) / rect.width;
-                this.audio.currentTime = pos * this.audio.duration;
+                this.seekFromClick(e, progressContainer);
             });
         }
         
@@ -63,8 +60,72 @@ class AudioPlayer {
             });
         }
         
+        // Now Playing Overlay Controls
+        const npPlay = document.getElementById('np-play-pause');
+        if (npPlay) npPlay.addEventListener('click', () => this.togglePlay());
+        
+        const npPrev = document.getElementById('np-prev');
+        if (npPrev) npPrev.addEventListener('click', () => this.playPrev());
+        
+        const npNext = document.getElementById('np-next');
+        if (npNext) npNext.addEventListener('click', () => this.playNext());
+        
+        const npProgressContainer = document.getElementById('np-progress-container');
+        if (npProgressContainer) {
+            npProgressContainer.addEventListener('click', (e) => {
+                this.seekFromClick(e, npProgressContainer);
+            });
+        }
+
+        const npFav = document.getElementById('np-fav');
+        if (npFav) {
+            npFav.addEventListener('click', () => {
+                if (!this.currentTrack || !window.storageManager) return;
+                const added = window.storageManager.toggleFavorite(this.currentTrack);
+                npFav.classList.toggle('active', added);
+                const icon = npFav.querySelector('i');
+                if (icon) {
+                    if (added) icon.setAttribute('fill', 'currentColor');
+                    else icon.removeAttribute('fill');
+                }
+                
+                // Keep the favourites page synced if we're on it
+                if (document.getElementById('page-favorites')?.classList.contains('active') && window.app && window.app.loadFavorites) {
+                    window.app.loadFavorites();
+                }
+            });
+        }
+        
         // Set default volume
         this.setVolume(1);
+    }
+
+    async seekFromClick(e, container) {
+        let duration = 0;
+        if (Capacitor.isNativePlatform() && this.nativeInitialized) {
+            try {
+                const dur = await NativeAudio.getDuration({ audioId: 'main' });
+                duration = dur.duration;
+            } catch(e) {}
+        } else if (this.audio) {
+            duration = this.audio.duration;
+        }
+        
+        if (!duration || isNaN(duration) || duration <= 0) return;
+        
+        const rect = container.getBoundingClientRect();
+        const pos = (e.clientX - rect.left) / rect.width;
+        const targetTime = pos * duration;
+        
+        if (Capacitor.isNativePlatform() && this.nativeInitialized) {
+            try {
+                await NativeAudio.seek({ audioId: 'main', timeInSeconds: targetTime });
+            } catch(err) {
+                console.error("Native seek error", err);
+            }
+        } else if (this.audio) {
+            this.audio.currentTime = targetTime;
+        }
     }
 
     setupAudioEvents() {
@@ -121,7 +182,12 @@ class AudioPlayer {
         
         const btnIcon = document.getElementById('btn-play-pause');
         if (btnIcon) {
-            btnIcon.innerHTML = `<i data-lucide="${isPlaying ? 'pause' : 'play'}"></i>`;
+            btnIcon.innerHTML = `<i data-lucide="${isPlaying ? 'pause' : 'play'}" style="width: 24px; height: 24px; margin-left: ${isPlaying ? '0' : '2px'};" fill="currentColor"></i>`;
+        }
+        
+        const npPlay = document.getElementById('np-play-pause');
+        if (npPlay) {
+            npPlay.innerHTML = `<i data-lucide="${isPlaying ? 'pause' : 'play'}" style="width: 40px; height: 40px; fill: white; margin-left: ${isPlaying ? '0' : '4px'};"></i>`;
         }
         
         // Update row icons based on state
@@ -468,6 +534,13 @@ class AudioPlayer {
             if (tc) tc.textContent = this.formatTime(current);
             const tt = document.getElementById('time-total');
             if (tt) tt.textContent = this.formatTime(total);
+            
+            const npPb = document.getElementById('np-progress-bar');
+            if (npPb) npPb.style.width = `${percent}%`;
+            const npTc = document.getElementById('np-time-current');
+            if (npTc) npTc.textContent = this.formatTime(current);
+            const npTt = document.getElementById('np-time-total');
+            if (npTt) npTt.textContent = this.formatTime(total);
         }
     }
     
@@ -475,6 +548,8 @@ class AudioPlayer {
         if (total > 0 && isFinite(total) && !isNaN(total)) {
             const tt = document.getElementById('time-total');
             if (tt) tt.textContent = this.formatTime(total);
+            const npTt = document.getElementById('np-time-total');
+            if (npTt) npTt.textContent = this.formatTime(total);
         }
     }
 
@@ -495,12 +570,38 @@ class AudioPlayer {
         const pa = document.getElementById('player-artist');
         if (pa) pa.textContent = track.artist;
         
+        const npPt = document.getElementById('np-title');
+        if (npPt) npPt.textContent = track.title;
+        const npPa = document.getElementById('np-artist');
+        if (npPa) npPa.textContent = track.artist;
+        
+        const npFav = document.getElementById('np-fav');
+        if (npFav && window.storageManager) {
+            const isFav = window.storageManager.isFavorite(track.id);
+            npFav.classList.toggle('active', isFav);
+            const icon = npFav.querySelector('i');
+            if (icon) {
+                if (isFav) icon.setAttribute('fill', 'currentColor');
+                else icon.removeAttribute('fill');
+            }
+        }
+        
         const artworkContainer = document.getElementById('player-artwork');
         if (artworkContainer) {
             if (track.thumbnail) {
                 artworkContainer.innerHTML = `<img src="${track.thumbnail}" alt="Artwork">`;
             } else {
                 artworkContainer.innerHTML = `<i data-lucide="music"></i>`;
+                if (window.lucide) lucide.createIcons();
+            }
+        }
+        
+        const npArtworkContainer = document.getElementById('np-artwork');
+        if (npArtworkContainer) {
+            if (track.thumbnail) {
+                npArtworkContainer.innerHTML = `<img src="${track.thumbnail}" alt="Artwork">`;
+            } else {
+                npArtworkContainer.innerHTML = `<i data-lucide="music" style="width: 64px; height: 64px;"></i>`;
                 if (window.lucide) lucide.createIcons();
             }
         }
@@ -528,6 +629,11 @@ class AudioPlayer {
         if (pb) pb.style.width = `0%`;
         const tc = document.getElementById('time-current');
         if (tc) tc.textContent = "0:00";
+        
+        const npPb = document.getElementById('np-progress-bar');
+        if (npPb) npPb.style.width = `0%`;
+        const npTc = document.getElementById('np-time-current');
+        if (npTc) npTc.textContent = "0:00";
     }
 }
 
