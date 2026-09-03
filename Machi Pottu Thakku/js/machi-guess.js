@@ -1,6 +1,6 @@
 /**
  * js/machi-guess.js
- * Machi Guess (Guess Artist Mode) - APK-Ready Isolated Mini-Game Engine
+ * Machi Guess (Guess Collection Mode) - APK-Ready Isolated Mini-Game Engine
  */
 
 import { Capacitor } from '@capacitor/core';
@@ -9,7 +9,7 @@ class MachiGuessEngine {
     constructor() {
         this.score = 0;
         this.currentTrack = null;
-        this.correctArtist = '';
+        this.correctCollection = '';
         this.usedSessionTrackIds = new Set();
         this.previewAudio = new Audio();
         this.previewTimer = null;
@@ -51,6 +51,13 @@ class MachiGuessEngine {
         } catch(e) {}
     }
 
+    getCollectionFromTrack(track) {
+        if (!track || !track.s3Key) return "Recently Added";
+        const parts = track.s3Key.split('/');
+        const folder = parts.length > 1 ? parts[parts.length - 2] : "";
+        return folder || "Recently Added";
+    }
+
     async waitForLibrary(maxRetries = 6, intervalMs = 500) {
         for (let i = 0; i < maxRetries; i++) {
             if (window.app && Array.isArray(window.app.musicLibrary) && window.app.musicLibrary.length > 0) {
@@ -76,22 +83,26 @@ class MachiGuessEngine {
         return tracks.filter(t => {
             if (!t || typeof t !== 'object') return false;
             const hasId = t.id || t.s3Key;
-            const hasArtist = t.artist && typeof t.artist === 'string' && t.artist.trim() !== '';
             const hasTitle = t.title && typeof t.title === 'string' && t.title.trim() !== '';
+            const hasS3Key = t.s3Key && typeof t.s3Key === 'string' && t.s3Key.trim() !== '';
             const hasSource = t.s3Key || t.localPath || t.nativeUrl || t.webViewUrl;
-            return Boolean(hasId && hasArtist && hasTitle && hasSource);
+            return Boolean(hasId && hasTitle && hasS3Key && hasSource);
         });
     }
 
-    extractUniqueArtists(tracks) {
-        const artistSet = new Set();
+    extractUniqueCollections(tracks) {
+        const collectionSet = new Set();
         tracks.forEach(t => {
-            if (t && t.artist && typeof t.artist === 'string') {
-                const trimmed = t.artist.trim();
-                if (trimmed) artistSet.add(trimmed);
-            }
+            const col = this.getCollectionFromTrack(t);
+            if (col) collectionSet.add(col);
         });
-        return Array.from(artistSet);
+        return Array.from(collectionSet);
+    }
+
+    generateCollectionChoices(correctCollection, allUniqueCollections) {
+        const wrongCollections = allUniqueCollections.filter(c => c.toLowerCase() !== correctCollection.toLowerCase());
+        const shuffledWrong = wrongCollections.sort(() => 0.5 - Math.random()).slice(0, 3);
+        return [correctCollection, ...shuffledWrong].sort(() => 0.5 - Math.random());
     }
 
     async openGame() {
@@ -171,15 +182,15 @@ class MachiGuessEngine {
             if (btnNext) btnNext.style.display = 'none';
 
             const tracks = await this.getEligibleTracks();
-            const uniqueArtists = this.extractUniqueArtists(tracks);
+            const uniqueCollections = this.extractUniqueCollections(tracks);
 
-            if (tracks.length === 0 || uniqueArtists.length < 4) {
+            if (tracks.length === 0 || uniqueCollections.length < 4) {
                 if (emptyState) {
                     emptyState.style.display = 'block';
-                    const isOnline = navigator.onLine;
-                    const msg = (isOnline && window.app && Array.isArray(window.app.musicLibrary) && window.app.musicLibrary.length > 0)
-                        ? "Not enough artists to start MACHI GUESS." 
-                        : "Download a few more songs to play MACHI GUESS offline.";
+                    const isOnline = navigator.onLine && window.app && Array.isArray(window.app.musicLibrary) && window.app.musicLibrary.length > 0;
+                    const msg = isOnline
+                        ? "Add a few more collections to play MACHI GUESS." 
+                        : "Download songs from a few collections to play MACHI GUESS offline.";
                     emptyState.innerHTML = `<p>${msg}</p>`;
                 }
                 if (gameContent) gameContent.style.display = 'none';
@@ -208,7 +219,7 @@ class MachiGuessEngine {
             const trackKey = selectedTrack.id || selectedTrack.s3Key;
             
             this.currentTrack = selectedTrack;
-            this.correctArtist = selectedTrack.artist.trim();
+            this.correctCollection = this.getCollectionFromTrack(selectedTrack);
             this.usedSessionTrackIds.add(trackKey);
             this.saveRecentHistory(trackKey);
 
@@ -222,22 +233,20 @@ class MachiGuessEngine {
                 }
             }
 
-            if (promptEl) promptEl.textContent = `Song: "${selectedTrack.title}" — Listen carefully...`;
+            // CRITICAL: Display ONLY "Listen carefully..." before answering!
+            if (promptEl) promptEl.textContent = "Listen carefully...";
 
-            // Generate 4 choices
-            const wrongArtists = uniqueArtists.filter(a => a.toLowerCase() !== this.correctArtist.toLowerCase());
-            
-            const shuffledWrong = wrongArtists.sort(() => 0.5 - Math.random()).slice(0, 3);
-            const allChoices = [this.correctArtist, ...shuffledWrong].sort(() => 0.5 - Math.random());
+            // Generate 4 choice collection buttons
+            const choices = this.generateCollectionChoices(this.correctCollection, uniqueCollections);
 
             // Render choice buttons
             if (choicesContainer) {
                 choicesContainer.innerHTML = '';
-                allChoices.forEach(artistName => {
+                choices.forEach(colName => {
                     const btn = document.createElement('button');
                     btn.className = 'mg-choice-btn';
-                    btn.textContent = artistName;
-                    btn.addEventListener('click', () => this.handleChoice(artistName, btn));
+                    btn.textContent = colName;
+                    btn.addEventListener('click', () => this.handleChoice(colName, btn));
                     choicesContainer.appendChild(btn);
                 });
             }
@@ -283,14 +292,14 @@ class MachiGuessEngine {
             if (!previewUrl) {
                 console.warn("[MACHI GUESS] Could not resolve preview URL for track:", track.title);
                 const promptEl = document.getElementById('mg-prompt');
-                if (promptEl) promptEl.textContent = `Song: "${track.title}" — Couldn't play audio preview.`;
+                if (promptEl) promptEl.textContent = "Where does this song live?";
                 return;
             }
 
             this.previewAudio.onerror = () => {
                 console.warn("[MACHI GUESS] Preview audio playback error");
                 const promptEl = document.getElementById('mg-prompt');
-                if (promptEl) promptEl.textContent = `Song: "${track.title}" — Couldn't play audio preview.`;
+                if (promptEl) promptEl.textContent = "Where does this song live?";
             };
 
             this.previewAudio.src = previewUrl;
@@ -304,13 +313,11 @@ class MachiGuessEngine {
                 });
             }
 
-            // Stop preview after 7 seconds
+            // After 7 seconds, stop audio and prompt question
             this.previewTimer = setTimeout(() => {
                 this.stopPreview();
                 const promptEl = document.getElementById('mg-prompt');
-                if (promptEl && this.currentTrack) {
-                    promptEl.textContent = `Song: "${this.currentTrack.title}" — Who is the artist?`;
-                }
+                if (promptEl) promptEl.textContent = "Where does this song live?";
             }, 7000);
 
         } catch (e) {
@@ -334,11 +341,11 @@ class MachiGuessEngine {
         this.isPlayingPreview = false;
     }
 
-    handleChoice(selectedArtist, selectedBtn) {
+    handleChoice(selectedCollection, selectedBtn) {
         try {
             this.stopPreview();
 
-            const isCorrect = selectedArtist.toLowerCase() === this.correctArtist.toLowerCase();
+            const isCorrect = selectedCollection.trim().toLowerCase() === this.correctCollection.trim().toLowerCase();
             const choicesContainer = document.getElementById('mg-choices-container');
             const resultEl = document.getElementById('mg-result');
             const btnNext = document.getElementById('mg-btn-next');
@@ -347,7 +354,7 @@ class MachiGuessEngine {
                 const buttons = choicesContainer.querySelectorAll('.mg-choice-btn');
                 buttons.forEach(btn => {
                     btn.disabled = true;
-                    if (btn.textContent.trim().toLowerCase() === this.correctArtist.toLowerCase()) {
+                    if (btn.textContent.trim().toLowerCase() === this.correctCollection.trim().toLowerCase()) {
                         btn.classList.add('correct');
                     } else if (btn === selectedBtn && !isCorrect) {
                         btn.classList.add('wrong');
@@ -361,13 +368,13 @@ class MachiGuessEngine {
                 if (resultEl) {
                     resultEl.style.display = 'block';
                     resultEl.className = 'mg-result success';
-                    resultEl.innerHTML = `🔥 Correct! Artist: <strong>${this.correctArtist}</strong>`;
+                    resultEl.innerHTML = `🔥 Correct! Collection: <strong>${this.correctCollection}</strong>`;
                 }
             } else {
                 if (resultEl) {
                     resultEl.style.display = 'block';
                     resultEl.className = 'mg-result failure';
-                    resultEl.innerHTML = `😏 Not quite! Correct artist: <strong>${this.correctArtist}</strong>`;
+                    resultEl.innerHTML = `😏 Not quite! Correct collection: <strong>${this.correctCollection}</strong>`;
                 }
             }
 
