@@ -178,7 +178,7 @@
 
         <!-- Player -->
         <footer class="player" style="justify-content: space-between; padding: 0 var(--spacing-2);">
-            <div class="player-track-info" style="width: auto; max-width: 50%; display: flex; align-items: center;">
+            <div class="player-track-info" style="width: auto; max-width: 50%; display: flex; align-items: center; cursor: pointer;" onclick="document.getElementById('page-now-playing').classList.add('active')">
                 <div class="player-artwork" id="player-artwork" style="width: 48px; height: 48px; margin-right: 12px; border-radius: var(--radius-sm); overflow: hidden;">
                     <i data-lucide="music"></i>
                 </div>
@@ -206,6 +206,51 @@
                 </div>
             </div>
         </footer>
+
+        <!-- Now Playing Overlay -->
+        <div id="page-now-playing" class="page-overlay">
+            <div class="np-header">
+                <button class="icon-btn" onclick="document.getElementById('page-now-playing').classList.remove('active')">
+                    <i data-lucide="chevron-down" style="color: var(--accent-color);"></i>
+                </button>
+                <div class="np-header-title" style="color: var(--accent-color); font-weight: 600;">Now Playing</div>
+                <div style="width: 44px;"></div> <!-- placeholder for balance -->
+            </div>
+            
+            <div class="np-artwork-container">
+                <div id="np-artwork" class="np-artwork">
+                    <i data-lucide="music" style="width: 64px; height: 64px;"></i>
+                </div>
+            </div>
+            
+            <div class="np-info-row">
+                <div class="np-meta">
+                    <div id="np-title" class="np-title">No track playing</div>
+                    <div id="np-artist" class="np-artist">-</div>
+                </div>
+                <button id="np-fav" class="icon-btn np-fav-btn">
+                    <i data-lucide="heart"></i>
+                </button>
+            </div>
+            
+            <div class="np-progress">
+                <div class="np-progress-bar-container" id="np-progress-container">
+                    <div class="np-progress-bar" id="np-progress-bar"></div>
+                </div>
+                <div class="np-time-row">
+                    <span id="np-time-current">0:00</span>
+                    <span id="np-time-total">0:00</span>
+                </div>
+            </div>
+            
+            <div class="np-controls">
+                <button class="control-btn" id="np-prev"><i data-lucide="skip-back" style="width: 32px; height: 32px; fill: white; stroke: white;"></i></button>
+                <button class="control-btn play-btn" id="np-play-pause">
+                    <i data-lucide="play" style="width: 40px; height: 40px; fill: white; margin-left: 4px;"></i>
+                </button>
+                <button class="control-btn" id="np-next"><i data-lucide="skip-forward" style="width: 32px; height: 32px; fill: white; stroke: white;"></i></button>
+            </div>
+        </div>
 
         <!-- Native HTML5 Audio Element -->
         <audio id="main-audio" preload="metadata"></audio>
