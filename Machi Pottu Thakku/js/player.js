@@ -30,27 +30,38 @@ class AudioPlayer {
 
     setupListeners() {
         // UI Controls
-        document.getElementById('btn-play-pause').addEventListener('click', () => this.togglePlay());
-        document.getElementById('btn-prev').addEventListener('click', () => this.playPrev());
-        document.getElementById('btn-next').addEventListener('click', () => this.playNext());
-        document.getElementById('btn-mute').addEventListener('click', () => this.toggleMute());
+        const btnPlay = document.getElementById('btn-play-pause');
+        if (btnPlay) btnPlay.addEventListener('click', () => this.togglePlay());
+        
+        const btnPrev = document.getElementById('btn-prev');
+        if (btnPrev) btnPrev.addEventListener('click', () => this.playPrev());
+        
+        const btnNext = document.getElementById('btn-next');
+        if (btnNext) btnNext.addEventListener('click', () => this.playNext());
+        
+        const btnMute = document.getElementById('btn-mute');
+        if (btnMute) btnMute.addEventListener('click', () => this.toggleMute());
         
         // Progress Bar Seeking
         const progressContainer = document.getElementById('progress-container');
-        progressContainer.addEventListener('click', (e) => {
-            if (!this.audio || !this.audio.duration || isNaN(this.audio.duration)) return;
-            const rect = progressContainer.getBoundingClientRect();
-            const pos = (e.clientX - rect.left) / rect.width;
-            this.audio.currentTime = pos * this.audio.duration;
-        });
+        if (progressContainer) {
+            progressContainer.addEventListener('click', (e) => {
+                if (!this.audio || !this.audio.duration || isNaN(this.audio.duration)) return;
+                const rect = progressContainer.getBoundingClientRect();
+                const pos = (e.clientX - rect.left) / rect.width;
+                this.audio.currentTime = pos * this.audio.duration;
+            });
+        }
         
         // Volume Bar
         const volumeContainer = document.getElementById('volume-container');
-        volumeContainer.addEventListener('click', (e) => {
-            const rect = volumeContainer.getBoundingClientRect();
-            const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-            this.setVolume(pos);
-        });
+        if (volumeContainer) {
+            volumeContainer.addEventListener('click', (e) => {
+                const rect = volumeContainer.getBoundingClientRect();
+                const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                this.setVolume(pos);
+            });
+        }
         
         // Set default volume
         this.setVolume(1);
@@ -423,7 +434,8 @@ class AudioPlayer {
             this.audio.volume = level;
         }
         
-        document.getElementById('volume-bar').style.width = `${level * 100}%`;
+        const volumeBar = document.getElementById('volume-bar');
+        if (volumeBar) volumeBar.style.width = `${level * 100}%`;
         
         const btnMute = document.getElementById('btn-mute');
         if (btnMute) {
@@ -450,15 +462,19 @@ class AudioPlayer {
     updateProgress(current, total) {
         if (total > 0 && isFinite(total) && !isNaN(total)) {
             const percent = (current / total) * 100;
-            document.getElementById('progress-bar').style.width = `${percent}%`;
-            document.getElementById('time-current').textContent = this.formatTime(current);
-            document.getElementById('time-total').textContent = this.formatTime(total);
+            const pb = document.getElementById('progress-bar');
+            if (pb) pb.style.width = `${percent}%`;
+            const tc = document.getElementById('time-current');
+            if (tc) tc.textContent = this.formatTime(current);
+            const tt = document.getElementById('time-total');
+            if (tt) tt.textContent = this.formatTime(total);
         }
     }
     
     updateDuration(total) {
         if (total > 0 && isFinite(total) && !isNaN(total)) {
-            document.getElementById('time-total').textContent = this.formatTime(total);
+            const tt = document.getElementById('time-total');
+            if (tt) tt.textContent = this.formatTime(total);
         }
     }
 
@@ -474,15 +490,19 @@ class AudioPlayer {
         if (!this.currentTrack) return;
         
         const track = this.currentTrack;
-        document.getElementById('player-title').textContent = track.title;
-        document.getElementById('player-artist').textContent = track.artist;
+        const pt = document.getElementById('player-title');
+        if (pt) pt.textContent = track.title;
+        const pa = document.getElementById('player-artist');
+        if (pa) pa.textContent = track.artist;
         
         const artworkContainer = document.getElementById('player-artwork');
-        if (track.thumbnail) {
-            artworkContainer.innerHTML = `<img src="${track.thumbnail}" alt="Artwork">`;
-        } else {
-            artworkContainer.innerHTML = `<i data-lucide="music"></i>`;
-            if (window.lucide) lucide.createIcons();
+        if (artworkContainer) {
+            if (track.thumbnail) {
+                artworkContainer.innerHTML = `<img src="${track.thumbnail}" alt="Artwork">`;
+            } else {
+                artworkContainer.innerHTML = `<i data-lucide="music"></i>`;
+                if (window.lucide) lucide.createIcons();
+            }
         }
         
         // Set Media Session API for OS integration
@@ -501,9 +521,13 @@ class AudioPlayer {
         
         // NativeAudio handles foreground notification automatically via playUrl on Android
         
+        // NativeAudio handles foreground notification automatically via playUrl on Android
+        
         // Reset progress visually
-        document.getElementById('progress-bar').style.width = `0%`;
-        document.getElementById('time-current').textContent = "0:00";
+        const pb = document.getElementById('progress-bar');
+        if (pb) pb.style.width = `0%`;
+        const tc = document.getElementById('time-current');
+        if (tc) tc.textContent = "0:00";
     }
 }
 
