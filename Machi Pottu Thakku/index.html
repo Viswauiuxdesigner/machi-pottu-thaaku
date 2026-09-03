@@ -38,9 +38,7 @@
                 <a href="#" class="nav-item" data-page="search">
                     <i data-lucide="search"></i> Search
                 </a>
-                <a href="#" class="nav-item" data-page="storage">
-                    <i data-lucide="library"></i> Library
-                </a>
+
                 <a href="#" class="nav-item" data-page="downloads">
                     <i data-lucide="download"></i> Downloads
                 </a>
@@ -53,13 +51,13 @@
         <!-- Main Content -->
         <main class="main-content">
             <header class="top-header">
-                <button class="icon-btn header-left"><i data-lucide="menu"></i></button>
+                <div class="header-left">
+                    <span class="brand-text" style="color: var(--accent-color); font-weight: 700; font-size: 18px;">Machi Pottu Thaaku</span>
+                </div>
                 <div class="header-center">
-                    <span class="brand-text" style="color: var(--accent-color); font-weight: 700;">Machi Pottu Thaaku</span>
                 </div>
                 <div class="header-right" style="display: flex; gap: var(--spacing-2); align-items: center;">
                     <button class="icon-btn" onclick="document.querySelector('.nav-item[data-page=\'search\']').click()"><i data-lucide="search"></i></button>
-                    <div class="user-avatar" style="width: 32px; height: 32px; border-radius: 50%; background: url('https://i.pravatar.cc/150?img=11') center/cover;"></div>
                 </div>
             </header>
 
@@ -91,17 +89,7 @@
                         </div>
                     </section>
                     
-                    <section class="recently-played-section">
-                        <div class="section-header">
-                            <h2>Recently Played</h2>
-                            <a href="#" class="view-all">View All <i data-lucide="chevron-right"></i></a>
-                        </div>
-                        <div id="recently-played-list" class="track-list">
-                            <div class="empty-state" style="padding: var(--spacing-2); color: var(--secondary-text); font-size: 13px;">
-                                No recently played tracks
-                            </div>
-                        </div>
-                    </section>
+
                 </div>
 
                 <div id="page-search" class="page">
