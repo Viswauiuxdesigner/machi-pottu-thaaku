@@ -1091,6 +1091,7 @@ body {
         text-overflow: ellipsis;
         max-width: 140px;
     }
+}
 
 /* Now Playing Overlay */
 .page-overlay {
