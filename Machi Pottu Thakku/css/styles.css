@@ -289,6 +289,137 @@ body {
     color: var(--primary-text);
 }
 
+/* Last Played Section & Card */
+.last-played-section {
+    margin-bottom: var(--spacing-4);
+}
+
+.last-played-card {
+    background: linear-gradient(135deg, rgba(255, 107, 0, 0.15) 0%, rgba(24, 24, 24, 0.9) 100%);
+    border: 1px solid rgba(255, 107, 0, 0.35);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-3);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-3);
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.last-played-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent-color);
+    box-shadow: 0 4px 20px rgba(255, 107, 0, 0.25);
+}
+
+.last-played-card:active {
+    transform: scale(0.98);
+}
+
+.last-played-artwork {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-sm);
+    object-fit: cover;
+    flex-shrink: 0;
+    background: var(--surface-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-color);
+}
+
+.last-played-artwork.placeholder {
+    background: rgba(255, 107, 0, 0.1);
+}
+
+.last-played-details {
+    flex: 1;
+    min-width: 0;
+}
+
+.last-played-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--accent-color);
+    margin-bottom: 2px;
+}
+
+.last-played-title {
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--primary-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.last-played-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+    font-size: 13px;
+    color: var(--secondary-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.last-played-artist {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.last-played-collection-tag {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    color: var(--primary-text);
+    flex-shrink: 0;
+}
+
+.last-played-play-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--accent-color);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    flex-shrink: 0;
+    transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.last-played-card:hover .last-played-play-btn {
+    transform: scale(1.08);
+    background: var(--accent-hover);
+}
+
+/* Highlighted row in track lists */
+.track-row.last-played-highlight {
+    background: rgba(255, 107, 0, 0.18) !important;
+    border-left: 4px solid var(--accent-color) !important;
+    box-shadow: inset 0 0 12px rgba(255, 107, 0, 0.1);
+}
+
+.track-row.last-played-highlight .track-title {
+    color: var(--accent-color);
+    font-weight: 700;
+}
+
 .section-header {
     display: flex;
     justify-content: space-between;
@@ -445,6 +576,16 @@ body {
 
 .track-row:hover {
     background-color: var(--border-color);
+}
+
+.track-row.last-played-highlight {
+    border-left: 3px solid var(--accent-color);
+    background: linear-gradient(90deg, rgba(255, 107, 0, 0.12) 0%, var(--elevated-surface) 100%);
+}
+
+.track-card.last-played-highlight {
+    border: 1px solid var(--accent-color);
+    box-shadow: 0 0 10px rgba(255, 107, 0, 0.25);
 }
 
 .track-artwork {
@@ -1196,12 +1337,18 @@ body {
 }
 
 .np-progress-bar-container {
-    height: 4px;
+    height: 14px;
+    padding: 5px 0;
+    box-sizing: border-box;
     background-color: var(--surface-color);
-    border-radius: 2px;
+    background-clip: content-box;
+    border-radius: 7px;
     margin-bottom: var(--spacing-2);
     cursor: pointer;
     position: relative;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .np-progress-bar {
