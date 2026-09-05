@@ -23,6 +23,7 @@ class AudioPlayer {
         this.nativeReady = false;
         this.playRequestId = 0;
         this.currentNativeSource = null;
+        this.isDraggingNpProgress = false;
 
         this.setupListeners();
         this.setupAudioEvents();
@@ -72,7 +73,85 @@ class AudioPlayer {
         
         const npProgressContainer = document.getElementById('np-progress-container');
         if (npProgressContainer) {
+            let isSeeking = false;
+            let seekRatio = 0;
+            let dragDuration = 0;
+
+            const updateDragPosition = (clientX) => {
+                const rect = npProgressContainer.getBoundingClientRect();
+                if (!rect.width) return;
+                seekRatio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+
+                const npPb = document.getElementById('np-progress-bar');
+                if (npPb) npPb.style.width = `${seekRatio * 100}%`;
+
+                if (dragDuration > 0) {
+                    const npTc = document.getElementById('np-time-current');
+                    if (npTc) npTc.textContent = this.formatTime(seekRatio * dragDuration);
+                }
+            };
+
+            npProgressContainer.addEventListener('pointerdown', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                isSeeking = true;
+                this.isDraggingNpProgress = true;
+                npProgressContainer.setPointerCapture(e.pointerId);
+
+                dragDuration = 0;
+                if (Capacitor.isNativePlatform() && this.nativeInitialized) {
+                    try {
+                        const dur = await NativeAudio.getDuration({ audioId: 'main' });
+                        dragDuration = dur.duration;
+                    } catch(err) {}
+                } else if (this.audio) {
+                    dragDuration = this.audio.duration;
+                }
+                if ((!dragDuration || isNaN(dragDuration)) && this.currentTrack?.duration) {
+                    dragDuration = this.currentTrack.duration;
+                }
+
+                updateDragPosition(e.clientX);
+            });
+
+            npProgressContainer.addEventListener('pointermove', (e) => {
+                if (!isSeeking) return;
+                e.preventDefault();
+                e.stopPropagation();
+                updateDragPosition(e.clientX);
+            });
+
+            const finishSeek = async (e) => {
+                if (!isSeeking) return;
+                isSeeking = false;
+
+                if (npProgressContainer.hasPointerCapture(e.pointerId)) {
+                    npProgressContainer.releasePointerCapture(e.pointerId);
+                }
+
+                if (dragDuration > 0) {
+                    const targetTime = seekRatio * dragDuration;
+                    if (Capacitor.isNativePlatform() && this.nativeInitialized) {
+                        try {
+                            await NativeAudio.seek({ audioId: 'main', timeInSeconds: targetTime });
+                        } catch(err) {
+                            console.error("Native seek error", err);
+                        }
+                    } else if (this.audio) {
+                        this.audio.currentTime = targetTime;
+                    }
+                }
+
+                setTimeout(() => {
+                    this.isDraggingNpProgress = false;
+                }, 150);
+            };
+
+            npProgressContainer.addEventListener('pointerup', finishSeek);
+            npProgressContainer.addEventListener('pointercancel', finishSeek);
+
             npProgressContainer.addEventListener('click', (e) => {
+                if (this.isDraggingNpProgress) return;
                 this.seekFromClick(e, npProgressContainer);
             });
         }
@@ -357,11 +436,11 @@ class AudioPlayer {
                 console.log("[NATIVE AUDIO] play");
                 await NativeAudio.play({ audioId: 'main' });
                 this.syncUIState(true);
+                this.saveLastPlayedTrack(track);
             } else {
                 this.audio.src = finalUrl;
-                this.audio.play().catch(err => {
-                    console.error("Autoplay prevented:", err);
-                });
+                await this.audio.play();
+                this.saveLastPlayedTrack(track);
             }
             
             // Prefetch next track to avoid gap
@@ -526,6 +605,7 @@ class AudioPlayer {
     }
 
     updateProgress(current, total) {
+        if (this.isDraggingNpProgress) return;
         if (total > 0 && isFinite(total) && !isNaN(total)) {
             const percent = (current / total) * 100;
             const pb = document.getElementById('progress-bar');
@@ -541,6 +621,40 @@ class AudioPlayer {
             if (npTc) npTc.textContent = this.formatTime(current);
             const npTt = document.getElementById('np-time-total');
             if (npTt) npTt.textContent = this.formatTime(total);
+        }
+    }
+
+    saveLastPlayedTrack(track) {
+        if (!track || !track.id) return;
+        try {
+            localStorage.setItem('mpt_last_played_track', track.id);
+            this.updateLastPlayedHighlight(track.id);
+        } catch(e) {
+            console.error("[PLAYER] Error saving last played track ID:", e);
+        }
+    }
+
+    getLastPlayedTrackId() {
+        if (this.currentTrack && this.currentTrack.id) {
+            return this.currentTrack.id;
+        }
+        try {
+            return localStorage.getItem('mpt_last_played_track');
+        } catch(e) {
+            return null;
+        }
+    }
+
+    updateLastPlayedHighlight(activeTrackId) {
+        const idToHighlight = activeTrackId || this.getLastPlayedTrackId();
+        document.querySelectorAll('.last-played-highlight').forEach(el => {
+            el.classList.remove('last-played-highlight');
+        });
+        if (idToHighlight) {
+            const escapedId = String(idToHighlight).replace(/"/g, '\\"');
+            document.querySelectorAll(`[data-id="${escapedId}"]`).forEach(el => {
+                el.classList.add('last-played-highlight');
+            });
         }
     }
     

@@ -107,9 +107,10 @@ class UIManager {
 
     async createTrackRow(track, queueList, index, isDownloadsView = false) {
         const isFav = window.storageManager.isFavorite(track.id);
+        const lastPlayedId = window.player ? window.player.getLastPlayedTrackId() : (localStorage.getItem('mpt_last_played_track') || null);
         
         const row = document.createElement('div');
-        row.className = 'track-row';
+        row.className = 'track-row' + (lastPlayedId && track.id === lastPlayedId ? ' last-played-highlight' : '');
         row.dataset.id = track.id;
         
         const artworkHtml = track.thumbnail ? 
@@ -285,8 +286,11 @@ class UIManager {
     
     // Create card for grid (Home Page)
     createGridCard(track, queueList, index) {
+        const lastPlayedId = window.player ? window.player.getLastPlayedTrackId() : (localStorage.getItem('mpt_last_played_track') || null);
+
         const card = document.createElement('div');
-        card.className = 'track-card';
+        card.className = 'track-card' + (lastPlayedId && track.id === lastPlayedId ? ' last-played-highlight' : '');
+        card.dataset.id = track.id;
         
         const artworkHtml = track.thumbnail ? 
             `<img src="${track.thumbnail}" class="grid-artwork" loading="lazy">` : 
