@@ -629,6 +629,9 @@ class AudioPlayer {
         try {
             localStorage.setItem('mpt_last_played_track', track.id);
             this.updateLastPlayedHighlight(track.id);
+            if (window.app && typeof window.app.renderLastPlayedCard === 'function') {
+                window.app.renderLastPlayedCard();
+            }
         } catch(e) {
             console.error("[PLAYER] Error saving last played track ID:", e);
         }

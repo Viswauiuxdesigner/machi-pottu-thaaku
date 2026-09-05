@@ -12,6 +12,15 @@ window.getApiUrl = function(path) {
     return path;
 };
 
+export function getTrackCollection(track) {
+    const parts = (track?.s3Key || '').split('/');
+    const folder = parts.length > 1 ? parts[parts.length - 2] : '';
+    return {
+        folder,
+        name: folder || 'Recently Added'
+    };
+}
+
 class App {
     constructor() {
         console.log("[RUNTIME] Local Music Library version loaded");
@@ -295,6 +304,91 @@ class App {
             });
             
             container.appendChild(card);
+        }
+
+        // Render Last Played card on Home screen
+        this.renderLastPlayedCard();
+    }
+
+    renderLastPlayedCard() {
+        const container = document.getElementById('last-played-section');
+        if (!container) return;
+
+        const lastPlayedId = window.player ? window.player.getLastPlayedTrackId() : (localStorage.getItem('mpt_last_played_track') || null);
+        if (!lastPlayedId || !this.musicLibrary || this.musicLibrary.length === 0) {
+            container.style.display = 'none';
+            container.innerHTML = '';
+            return;
+        }
+
+        const track = this.musicLibrary.find(t => String(t.id) === String(lastPlayedId));
+        if (!track) {
+            container.style.display = 'none';
+            container.innerHTML = '';
+            return;
+        }
+
+        const { folder, name: collectionName } = getTrackCollection(track);
+        container.style.display = 'block';
+
+        const artworkHtml = track.thumbnail
+            ? `<img src="${track.thumbnail}" class="last-played-artwork" loading="lazy" alt="${track.title}">`
+            : `<div class="last-played-artwork placeholder"><i data-lucide="music"></i></div>`;
+
+        container.innerHTML = `
+            <div class="section-header" style="margin-bottom: var(--spacing-2);">
+                <h2>Last Played</h2>
+            </div>
+            <div class="last-played-card" data-id="${track.id}">
+                ${artworkHtml}
+                <div class="last-played-details">
+                    <div class="last-played-badge"><i data-lucide="clock" style="width: 12px; height: 12px;"></i> Resume Playing</div>
+                    <div class="last-played-title">${track.title || 'Unknown Title'}</div>
+                    <div class="last-played-meta">
+                        <span class="last-played-artist">${track.artist || 'Unknown Artist'}</span>
+                        <span class="last-played-collection-tag">${collectionName}</span>
+                    </div>
+                </div>
+                <button class="last-played-play-btn" aria-label="Play Collection">
+                    <i data-lucide="play" style="width: 20px; height: 20px; margin-left: 2px;" fill="currentColor"></i>
+                </button>
+            </div>
+        `;
+
+        if (window.lucide) lucide.createIcons({ root: container });
+
+        const cardEl = container.querySelector('.last-played-card');
+        if (cardEl) {
+            cardEl.addEventListener('click', () => {
+                // Determine complete collection using the exact same s3Key folder logic
+                const collectionTracks = this.musicLibrary.filter(t => {
+                    const { folder: tFolder } = getTrackCollection(t);
+                    return tFolder === folder;
+                });
+
+                const searchInput = document.getElementById('search-input');
+                if (searchInput) searchInput.value = collectionName;
+
+                window.uiManager.showPage('search');
+                window.uiManager.renderTrackList(
+                    collectionTracks,
+                    'search-results',
+                    "No results found for '" + collectionName + "'"
+                );
+
+                setTimeout(() => {
+                    if (window.player && typeof window.player.updateLastPlayedHighlight === 'function') {
+                        window.player.updateLastPlayedHighlight(track.id);
+                    }
+                    const targetRow = document.querySelector(`#search-results .track-row[data-id="${track.id}"]`);
+                    if (targetRow) {
+                        targetRow.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'center'
+                        });
+                    }
+                }, 50);
+            });
         }
     }
 
