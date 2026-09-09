@@ -6,9 +6,18 @@
 class UIManager {
     constructor() {
         this.pages = ['home', 'search', 'saved', 'favorites', 'recent', 'downloads', 'storage'];
+        this.currentPage = 'home';
+        this.previousPage = 'home';
+        this.pageHistory = ['home'];
     }
 
-    showPage(pageId) {
+    showPage(pageId, isBack = false) {
+        if (!isBack && this.currentPage !== pageId) {
+            this.previousPage = this.currentPage;
+            this.pageHistory.push(pageId);
+        }
+        this.currentPage = pageId;
+
         this.pages.forEach(p => {
             const el = document.getElementById(`page-${p}`);
             if (el) {
@@ -29,6 +38,12 @@ class UIManager {
             }
         });
         
+        // Hide top app-header search icon while Downloads page is active
+        const topSearchBtn = document.getElementById('top-header-search-btn');
+        if (topSearchBtn) {
+            topSearchBtn.style.display = (pageId === 'downloads') ? 'none' : '';
+        }
+
         // Refresh specific page data if needed
         if (pageId === 'saved') window.app.loadSavedTracks();
         if (pageId === 'favorites') window.app.loadFavorites();
@@ -36,7 +51,19 @@ class UIManager {
         if (pageId === 'storage') window.app.updateStorageStats();
         
         // Scroll to top
-        document.querySelector('.scroll-container').scrollTop = 0;
+        const scrollContainer = document.querySelector('.scroll-container');
+        if (scrollContainer) scrollContainer.scrollTop = 0;
+    }
+
+    goBackFromDownloads() {
+        if (this.pageHistory.length > 1 && this.pageHistory[this.pageHistory.length - 1] === 'downloads') {
+            this.pageHistory.pop();
+            const targetPage = this.pageHistory[this.pageHistory.length - 1] || 'home';
+            this.showPage(targetPage, true);
+        } else {
+            const targetPage = (this.previousPage && this.previousPage !== 'downloads') ? this.previousPage : 'home';
+            this.showPage(targetPage, true);
+        }
     }
 
     showNotification(message, type = 'info') {

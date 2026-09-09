@@ -28,6 +28,7 @@ class App {
         this.currentSearchQuery = '';
         this.currentSearchResults = [];
         this.musicLibrary = [];
+        this.downloadsSortMode = 'recent';
         this.init();
     }
 
@@ -64,6 +65,20 @@ class App {
                 window.uiManager.showPage(pageId);
             });
         });
+
+        // Setup Downloads Back Button
+        const btnDownloadsBack = document.getElementById('btn-downloads-back') || document.querySelector('.downloads-header .back-btn');
+        if (btnDownloadsBack) {
+            btnDownloadsBack.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (window.uiManager && typeof window.uiManager.goBackFromDownloads === 'function') {
+                    window.uiManager.goBackFromDownloads();
+                }
+            });
+        }
+
+        // Setup Downloads Sort Dropdown
+        this.setupDownloadsSort();
         
         // Dynamic Greeting
         this.updateGreeting();
@@ -397,10 +412,77 @@ class App {
         window.uiManager.renderTrackList(tracks, 'favorites-results', "You haven't favorited any tracks yet.");
     }
     
+    setupDownloadsSort() {
+        const sortBtn = document.getElementById('downloads-sort-btn');
+        const sortMenu = document.getElementById('downloads-sort-menu');
+        
+        if (sortBtn && sortMenu) {
+            sortBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isOpen = sortMenu.style.display === 'flex' || sortMenu.style.display === 'block';
+                sortMenu.style.display = isOpen ? 'none' : 'flex';
+            });
+        }
+
+        document.addEventListener('click', (e) => {
+            if (sortMenu && (sortMenu.style.display === 'flex' || sortMenu.style.display === 'block')) {
+                if (!sortMenu.contains(e.target) && (!sortBtn || !sortBtn.contains(e.target))) {
+                    sortMenu.style.display = 'none';
+                }
+            }
+        });
+
+        const menuItems = document.querySelectorAll('.sort-menu-item');
+        menuItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const sortMode = item.getAttribute('data-sort');
+                this.downloadsSortMode = sortMode;
+
+                menuItems.forEach(mi => mi.classList.toggle('active', mi.getAttribute('data-sort') === sortMode));
+
+                const labelMap = {
+                    'recent': 'Recently Downloaded',
+                    'title': 'Title (A-Z)',
+                    'artist': 'Artist',
+                    'oldest': 'Oldest First'
+                };
+                const labelEl = document.getElementById('downloads-sort-label');
+                if (labelEl) {
+                    labelEl.textContent = labelMap[sortMode] || 'Recently Downloaded';
+                }
+
+                if (sortMenu) {
+                    sortMenu.style.display = 'none';
+                }
+
+                this.loadDownloads();
+            });
+        });
+    }
+
     loadDownloads() {
         if (!window.OfflineManager) return;
-        const tracks = window.OfflineManager.getOfflineTracks();
-        window.uiManager.renderTrackList(tracks, 'downloads-results', "You haven't downloaded any tracks yet. Download tracks to listen offline.");
+        const tracks = window.OfflineManager.getOfflineTracks() || [];
+        
+        const countEl = document.getElementById('downloads-count');
+        if (countEl) {
+            countEl.textContent = `Downloaded Songs (${tracks.length})`;
+        }
+
+        let sortedTracks = [...tracks];
+        if (this.downloadsSortMode === 'title') {
+            sortedTracks.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+        } else if (this.downloadsSortMode === 'artist') {
+            sortedTracks.sort((a, b) => (a.artist || '').localeCompare(b.artist || ''));
+        } else if (this.downloadsSortMode === 'oldest') {
+            sortedTracks.sort((a, b) => (a.downloadedAt || 0) - (b.downloadedAt || 0));
+        } else {
+            // Default: 'recent'
+            sortedTracks.sort((a, b) => (b.downloadedAt || 0) - (a.downloadedAt || 0));
+        }
+
+        window.uiManager.renderTrackList(sortedTracks, 'downloads-results', "You haven't downloaded any tracks yet. Download tracks to listen offline.");
     }
 }
 
