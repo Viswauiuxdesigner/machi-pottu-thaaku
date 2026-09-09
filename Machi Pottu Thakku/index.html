@@ -57,7 +57,7 @@
                 <div class="header-center">
                 </div>
                 <div class="header-right" style="display: flex; gap: var(--spacing-2); align-items: center;">
-                    <button class="icon-btn" onclick="document.querySelector('.nav-item[data-page=\'search\']').click()"><i data-lucide="search"></i></button>
+                    <button class="icon-btn" id="top-header-search-btn" onclick="document.querySelector('.nav-item[data-page=\'search\']').click()"><i data-lucide="search"></i></button>
                 </div>
             </header>
 
@@ -153,18 +153,36 @@
 
                 <div id="page-downloads" class="page">
                     <div class="page-header downloads-header">
-                        <button class="back-btn"><i data-lucide="chevron-left"></i></button>
+                        <button class="back-btn" id="btn-downloads-back" aria-label="Back"><i data-lucide="chevron-left"></i></button>
                         <h1>Downloads</h1>
-                        <div class="header-right">
-                            <button class="icon-btn"><i data-lucide="search"></i></button>
-                            <button class="icon-btn"><i data-lucide="list-filter"></i></button>
-                        </div>
+                        <div class="header-right" style="width: 36px;"></div>
                     </div>
 
                     <div class="downloads-sort-header">
                         <span id="downloads-count">Downloaded Songs (0)</span>
-                        <div class="sort-dropdown">
-                            Recently Downloaded <i data-lucide="chevron-down"></i>
+                        <div class="sort-dropdown-container">
+                            <button class="sort-dropdown-btn" id="downloads-sort-btn" aria-label="Sort Downloads">
+                                <span id="downloads-sort-label">Recently Downloaded</span>
+                                <i data-lucide="chevron-down"></i>
+                            </button>
+                            <div class="sort-menu" id="downloads-sort-menu" style="display: none;">
+                                <button class="sort-menu-item active" data-sort="recent">
+                                    <i data-lucide="clock"></i>
+                                    <span>Recently Downloaded</span>
+                                </button>
+                                <button class="sort-menu-item" data-sort="title">
+                                    <i data-lucide="type"></i>
+                                    <span>Title (A-Z)</span>
+                                </button>
+                                <button class="sort-menu-item" data-sort="artist">
+                                    <i data-lucide="user"></i>
+                                    <span>Artist</span>
+                                </button>
+                                <button class="sort-menu-item" data-sort="oldest">
+                                    <i data-lucide="calendar"></i>
+                                    <span>Oldest First</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
 
