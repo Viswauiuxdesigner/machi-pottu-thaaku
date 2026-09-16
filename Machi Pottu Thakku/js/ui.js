@@ -55,15 +55,55 @@ class UIManager {
         if (scrollContainer) scrollContainer.scrollTop = 0;
     }
 
-    goBackFromDownloads() {
-        if (this.pageHistory.length > 1 && this.pageHistory[this.pageHistory.length - 1] === 'downloads') {
-            this.pageHistory.pop();
+    navigateBack() {
+        // 1. Close downloads sort menu if open
+        const sortMenu = document.getElementById('downloads-sort-menu');
+        if (sortMenu && (sortMenu.style.display === 'flex' || sortMenu.style.display === 'block')) {
+            sortMenu.style.display = 'none';
+            return true;
+        }
+
+        // 2. Close Machi Guess overlay if active
+        const mgOverlay = document.getElementById('page-machi-guess');
+        if (mgOverlay && mgOverlay.classList.contains('active')) {
+            if (window.machiGuess && typeof window.machiGuess.closeGame === 'function') {
+                window.machiGuess.closeGame();
+            } else {
+                mgOverlay.classList.remove('active');
+            }
+            return true;
+        }
+
+        // 3. Close Now Playing overlay if active (playback continues uninterrupted)
+        const npOverlay = document.getElementById('page-now-playing');
+        if (npOverlay && npOverlay.classList.contains('active')) {
+            npOverlay.classList.remove('active');
+            return true;
+        }
+
+        // 4. Pop internal page history if available
+        if (this.pageHistory.length > 1) {
+            if (this.pageHistory[this.pageHistory.length - 1] === this.currentPage) {
+                this.pageHistory.pop();
+            }
             const targetPage = this.pageHistory[this.pageHistory.length - 1] || 'home';
             this.showPage(targetPage, true);
-        } else {
-            const targetPage = (this.previousPage && this.previousPage !== 'downloads') ? this.previousPage : 'home';
-            this.showPage(targetPage, true);
+            return true;
         }
+
+        // 5. If on another page without history, return to home
+        if (this.currentPage !== 'home') {
+            this.pageHistory = ['home'];
+            this.showPage('home', true);
+            return true;
+        }
+
+        // At root home with no history/overlay
+        return false;
+    }
+
+    goBackFromDownloads() {
+        this.navigateBack();
     }
 
     showNotification(message, type = 'info') {
@@ -235,7 +275,7 @@ class UIManager {
                 window.OfflineManager.isDownloaded(track.id).then(isDl => {
                     if (isDl) {
                         dlBtn.classList.add('active');
-                        dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--primary-color)"></i>`;
+                        dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--accent-color)"></i>`;
                         if (window.lucide) lucide.createIcons({root: dlBtn});
                     }
                 });
@@ -254,7 +294,7 @@ class UIManager {
                             if (window.lucide) lucide.createIcons({root: dlBtn});
                             
                             // If we are on the downloads page, refresh
-                            if (document.getElementById('page-downloads').classList.contains('active') && window.app.loadDownloads) {
+                            if (document.getElementById('page-downloads').classList.contains('active') && window.app && window.app.loadDownloads) {
                                 window.app.loadDownloads();
                             }
                         }
@@ -266,11 +306,11 @@ class UIManager {
                         try {
                             await window.OfflineManager.downloadTrack(track);
                             dlBtn.classList.add('active');
-                            dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--primary-color)"></i>`;
+                            dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--accent-color)"></i>`;
                             window.uiManager.showNotification('Song downloaded', 'success');
                             
-                            if (window.app && window.app.loadDownloads) {
-                                window.uiManager.showPage('downloads');
+                            if (document.getElementById('page-downloads')?.classList.contains('active') && window.app && window.app.loadDownloads) {
+                                window.app.loadDownloads();
                             }
                         } catch (err) {
                             dlBtn.innerHTML = `<i data-lucide="download"></i>`;

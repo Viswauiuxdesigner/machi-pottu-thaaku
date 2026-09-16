@@ -4,6 +4,7 @@
  */
 
 import { Capacitor } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
 
 window.getApiUrl = function(path) {
     if (Capacitor.isNativePlatform()) {
@@ -29,6 +30,7 @@ class App {
         this.currentSearchResults = [];
         this.musicLibrary = [];
         this.downloadsSortMode = 'recent';
+        this.isDownloadingCollection = false;
         this.init();
     }
 
@@ -57,11 +59,17 @@ class App {
         // Fetch music library
         await this.loadMusicLibrary();
 
+        // Setup Android Back Button Listener (Capacitor & Webview fallback)
+        this.setupBackButton();
+
         // Setup Navigation Listeners
         document.querySelectorAll('.nav-item').forEach(el => {
             el.addEventListener('click', (e) => {
                 e.preventDefault();
                 const pageId = el.getAttribute('data-page');
+                if (pageId === 'search') {
+                    this.resetSearchPage();
+                }
                 window.uiManager.showPage(pageId);
             });
         });
@@ -87,6 +95,7 @@ class App {
         const btnExplore = document.getElementById('btn-explore');
         if (btnExplore) {
             btnExplore.addEventListener('click', () => {
+                this.resetSearchPage();
                 window.uiManager.showPage('search');
                 const searchInput = document.getElementById('search-input');
                 if (searchInput) {
@@ -209,12 +218,83 @@ class App {
         }
     }
 
+    setupBackButton() {
+        if (this._backButtonRegistered) return;
+        this._backButtonRegistered = true;
+
+        let listenerAdded = false;
+
+        if (CapApp && typeof CapApp.addListener === 'function') {
+            try {
+                CapApp.addListener('backButton', () => {
+                    const handled = window.uiManager && typeof window.uiManager.navigateBack === 'function'
+                        ? window.uiManager.navigateBack()
+                        : false;
+                    if (!handled && typeof CapApp.exitApp === 'function') {
+                        CapApp.exitApp();
+                    }
+                });
+                listenerAdded = true;
+            } catch (e) {
+                console.warn('[BACK] Error adding Capacitor App backButton listener:', e);
+            }
+        }
+
+        // Webview / Cordova document fallback (only if native Capacitor App plugin was not available)
+        if (!listenerAdded) {
+            document.addEventListener('backbutton', (e) => {
+                if (e && typeof e.preventDefault === 'function') e.preventDefault();
+                const handled = window.uiManager && typeof window.uiManager.navigateBack === 'function'
+                    ? window.uiManager.navigateBack()
+                    : false;
+                if (!handled && CapApp && typeof CapApp.exitApp === 'function') {
+                    CapApp.exitApp();
+                }
+            });
+        }
+    }
+
+    resetSearchPage() {
+        const searchInput = document.getElementById('search-input');
+        if (searchInput) searchInput.value = '';
+        this.currentSearchQuery = '';
+        this.currentSearchResults = [];
+        
+        // Hide collection header if present
+        const collectionHeader = document.getElementById('collection-header');
+        if (collectionHeader) {
+            collectionHeader.style.display = 'none';
+            collectionHeader.innerHTML = '';
+        }
+
+        // Reset chips active state
+        document.querySelectorAll('.search-chip').forEach(c => c.classList.remove('active'));
+
+        // Reset search results to empty state
+        const resultsEl = document.getElementById('search-results');
+        if (resultsEl) {
+            resultsEl.innerHTML = `
+                <div class="empty-state">
+                    <i data-lucide="search" class="empty-icon"></i>
+                    <p>Search for Tamil songs, artists...</p>
+                </div>
+            `;
+            if (window.lucide) lucide.createIcons();
+        }
+    }
+
     setupSearch() {
         const searchInput = document.getElementById('search-input');
         
         searchInput.addEventListener('input', (e) => {
             const query = e.target.value.trim();
             
+            // Hide collection header when actively searching
+            const collectionHeader = document.getElementById('collection-header');
+            if (collectionHeader) {
+                collectionHeader.style.display = 'none';
+            }
+
             if (!query) {
                 document.getElementById('search-results').innerHTML = `
                     <div class="empty-state">
@@ -269,6 +349,145 @@ class App {
         }
     }
 
+    openCollection(title, tracks) {
+        // Ensure search input starts empty
+        const searchInput = document.getElementById('search-input');
+        if (searchInput) searchInput.value = '';
+        this.currentSearchQuery = '';
+        this.currentSearchResults = tracks || [];
+
+        // Reset chips
+        document.querySelectorAll('.search-chip').forEach(c => c.classList.remove('active'));
+
+        // Render Collection Header with title, count, and [Download All] button
+        const collectionHeader = document.getElementById('collection-header');
+        if (collectionHeader) {
+            const countText = tracks.length === 1 ? '1 song' : `${tracks.length} songs`;
+            collectionHeader.style.display = 'flex';
+            collectionHeader.innerHTML = `
+                <div class="collection-header-info">
+                    <div class="collection-header-title">${title}</div>
+                    <div class="collection-header-subtitle">${countText}</div>
+                </div>
+                <button id="btn-download-all" class="btn-download-all" aria-label="Download All Songs in ${title}">
+                    <i data-lucide="download"></i>
+                    <span>Download All</span>
+                </button>
+            `;
+            if (window.lucide) lucide.createIcons({ root: collectionHeader });
+
+            const dlAllBtn = collectionHeader.querySelector('#btn-download-all');
+            if (dlAllBtn) {
+                dlAllBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.downloadAllInCollection(tracks, title, dlAllBtn);
+                });
+            }
+        }
+
+        window.uiManager.showPage('search');
+        window.uiManager.renderTrackList(tracks, 'search-results', `No tracks found in ${title}`);
+    }
+
+    async downloadAllInCollection(tracks, collectionName, btnEl) {
+        if (!tracks || tracks.length === 0) {
+            window.uiManager.showNotification("Collection has no songs to download", "warning");
+            return;
+        }
+
+        if (!window.OfflineManager || typeof window.OfflineManager.downloadTrack !== 'function') {
+            window.uiManager.showNotification("Download manager is unavailable", "error");
+            return;
+        }
+
+        // Prevent duplicate simultaneous downloads
+        if (this.isDownloadingCollection) {
+            return;
+        }
+        this.isDownloadingCollection = true;
+
+        if (btnEl) {
+            btnEl.disabled = true;
+            btnEl.innerHTML = `<i data-lucide="loader" class="spin"></i> <span>Checking...</span>`;
+            if (window.lucide) lucide.createIcons({ root: btnEl });
+        }
+
+        try {
+            // Find which songs are already downloaded vs missing
+            const missingTracks = [];
+            for (const track of tracks) {
+                const isDl = typeof window.OfflineManager.isDownloaded === 'function'
+                    ? await window.OfflineManager.isDownloaded(track.id)
+                    : false;
+                if (!isDl) {
+                    missingTracks.push(track);
+                }
+            }
+
+            // Edge Case 4: All songs already downloaded
+            if (missingTracks.length === 0) {
+                window.uiManager.showNotification("All songs already downloaded", "info");
+                window.uiManager.showPage('downloads');
+                return;
+            }
+
+            // Download missing tracks sequentially with progress feedback
+            let successCount = 0;
+            let failCount = 0;
+
+            for (let i = 0; i < missingTracks.length; i++) {
+                const track = missingTracks[i];
+                if (btnEl) {
+                    btnEl.innerHTML = `<i data-lucide="loader" class="spin"></i> <span>Downloading (${i + 1}/${missingTracks.length})...</span>`;
+                    if (window.lucide) lucide.createIcons({ root: btnEl });
+                }
+
+                try {
+                    await window.OfflineManager.downloadTrack(track);
+                    successCount++;
+
+                    // Update UI icon if row is currently in DOM
+                    const row = document.querySelector(`.track-row[data-id="${track.id}"]`);
+                    if (row) {
+                        const dlBtn = row.querySelector('.action-download');
+                        if (dlBtn) {
+                            dlBtn.classList.add('active');
+                            dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--accent-color)"></i>`;
+                            if (window.lucide) lucide.createIcons({ root: dlBtn });
+                        }
+                    }
+                } catch (err) {
+                    console.error(`[DOWNLOAD ALL] Failed downloading track: ${track.title}`, err);
+                    failCount++;
+                }
+            }
+
+            // Notification based on results
+            if (failCount === 0) {
+                const msg = missingTracks.length === 1 ? 'Song downloaded' : `Downloaded all ${successCount} songs`;
+                window.uiManager.showNotification(msg, 'success');
+            } else if (successCount > 0) {
+                window.uiManager.showNotification(`Downloaded ${successCount} of ${missingTracks.length} songs`, 'warning');
+            } else {
+                window.uiManager.showNotification('Failed to download songs', 'error');
+            }
+
+            // After collection download finishes, navigate to Downloads page
+            window.uiManager.showPage('downloads');
+
+        } catch (e) {
+            console.error('[DOWNLOAD ALL] Unexpected error:', e);
+            window.uiManager.showNotification('Download error: ' + e.message, 'error');
+        } finally {
+            this.isDownloadingCollection = false;
+            if (btnEl) {
+                btnEl.disabled = false;
+                btnEl.innerHTML = `<i data-lucide="download"></i> <span>Download All</span>`;
+                if (window.lucide) lucide.createIcons({ root: btnEl });
+            }
+        }
+    }
+
     loadHomeData() {
         const container = document.getElementById('collections-grid');
         if (!container) return;
@@ -312,10 +531,7 @@ class App {
             `;
             
             card.addEventListener('click', () => {
-                const searchInput = document.getElementById('search-input');
-                if (searchInput) searchInput.value = title;
-                window.uiManager.showPage('search');
-                window.uiManager.renderTrackList(tracks, 'search-results', "No results found for '" + title + "'");
+                this.openCollection(title, tracks);
             });
             
             container.appendChild(card);
@@ -381,15 +597,7 @@ class App {
                     return tFolder === folder;
                 });
 
-                const searchInput = document.getElementById('search-input');
-                if (searchInput) searchInput.value = collectionName;
-
-                window.uiManager.showPage('search');
-                window.uiManager.renderTrackList(
-                    collectionTracks,
-                    'search-results',
-                    "No results found for '" + collectionName + "'"
-                );
+                this.openCollection(collectionName, collectionTracks);
 
                 setTimeout(() => {
                     if (window.player && typeof window.player.updateLastPlayedHighlight === 'function') {
