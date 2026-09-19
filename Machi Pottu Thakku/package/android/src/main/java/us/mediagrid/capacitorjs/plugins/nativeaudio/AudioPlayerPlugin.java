@@ -712,4 +712,8 @@ public class AudioPlayerPlugin extends Plugin {
     public void emitPreviousEvent() {
         notifyListeners("nativeMediaPrevious", new JSObject());
     }
+
+    public void emitAudioEndEvent() {
+        notifyListeners("nativeAudioEnd", new JSObject());
+    }
 }

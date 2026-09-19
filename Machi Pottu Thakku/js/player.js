@@ -237,6 +237,10 @@ class AudioPlayer {
                 console.log("[NATIVE AUDIO] Lock-screen Previous clicked");
                 this.playPrev();
             });
+            NativeAudio.addListener('nativeAudioEnd', () => {
+                console.log("[NATIVE AUDIO] Lock-screen / Native track ended event received");
+                this.handleTrackEnded();
+            });
             
             // Periodically sync progress from native audio
             setInterval(async () => {
@@ -723,8 +727,8 @@ class AudioPlayer {
             }
         }
         
-        // Set Media Session API for OS integration
-        if ('mediaSession' in navigator) {
+        // Set Media Session API for Web/PWA browsers (Native Android MediaSession is managed by Media3 AudioPlayerService)
+        if (!Capacitor.isNativePlatform() && 'mediaSession' in navigator) {
             navigator.mediaSession.metadata = new MediaMetadata({
                 title: track.title,
                 artist: track.artist,

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.Uri;
 import android.os.Binder;
 import android.util.Log;
+import android.os.PowerManager;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
@@ -35,6 +36,8 @@ public class AudioSource extends Binder {
 
     private boolean isPlaying = false;
     private boolean isStopped = true;
+
+    private PowerManager.WakeLock transitionWakeLock;
 
     public AudioSource(
         AudioPlayerPlugin pluginOwner,
@@ -116,6 +119,7 @@ public class AudioSource extends Binder {
     }
 
     public void play() {
+        releaseTransitionWakeLock();
         setIsPlaying();
 
         Player player = getPlayer();
@@ -142,6 +146,7 @@ public class AudioSource extends Binder {
     }
 
     public void stop() {
+        releaseTransitionWakeLock();
         setIsStopped();
 
         Player player = getPlayer();
@@ -234,6 +239,7 @@ public class AudioSource extends Binder {
     }
 
     public void destroy() {
+        releaseTransitionWakeLock();
         audioMetadata.stopUpdater();
 
         if (!useForNotification) {
@@ -292,14 +298,52 @@ public class AudioSource extends Binder {
     }
 
     public void emitNext() {
+        acquireTransitionWakeLock();
         if (pluginOwner != null) {
             pluginOwner.emitNextEvent();
         }
     }
 
     public void emitPrevious() {
+        acquireTransitionWakeLock();
         if (pluginOwner != null) {
             pluginOwner.emitPreviousEvent();
+        }
+    }
+
+    public synchronized void acquireTransitionWakeLock() {
+        try {
+            if (pluginOwner != null && pluginOwner.getContext() != null) {
+                if (transitionWakeLock == null) {
+                    PowerManager pm = (PowerManager) pluginOwner
+                        .getContext()
+                        .getSystemService(Context.POWER_SERVICE);
+                    if (pm != null) {
+                        transitionWakeLock = pm.newWakeLock(
+                            PowerManager.PARTIAL_WAKE_LOCK,
+                            "MachiPottuThaaku:TransitionWakeLock"
+                        );
+                        transitionWakeLock.setReferenceCounted(false);
+                    }
+                }
+                if (transitionWakeLock != null && !transitionWakeLock.isHeld()) {
+                    Log.i(TAG, "Acquiring transition WakeLock (max 30s)");
+                    transitionWakeLock.acquire(30000);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error acquiring transition WakeLock", e);
+        }
+    }
+
+    public synchronized void releaseTransitionWakeLock() {
+        try {
+            if (transitionWakeLock != null && transitionWakeLock.isHeld()) {
+                Log.i(TAG, "Releasing transition WakeLock");
+                transitionWakeLock.release();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error releasing transition WakeLock", e);
         }
     }
 }
