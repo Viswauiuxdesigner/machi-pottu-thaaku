@@ -97,7 +97,98 @@ jobs:
     - name: Capacitor Sync
       working-directory: ${{ env.PROJECT_DIR }}
       run: npx cap sync android
-      
+
+    - name: Configure Android Media Playback
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        python3 <<'PY'
+        from pathlib import Path
+
+        manifest_path = Path("android/app/src/main/AndroidManifest.xml")
+        manifest = manifest_path.read_text(encoding="utf-8")
+
+        permissions = [
+            "android.permission.FOREGROUND_SERVICE",
+            "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+            "android.permission.WAKE_LOCK",
+        ]
+
+        for permission in permissions:
+            permission_line = f'    <uses-permission android:name="{permission}" />'
+            if permission not in manifest:
+                manifest = manifest.replace(
+                    "<application",
+                    permission_line + "\n    <application",
+                    1
+                )
+
+        service_block = """        <service
+            android:name="us.mediagrid.capacitorjs.plugins.nativeaudio.AudioPlayerService"
+            android:description="@string/audio_player_service_description"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService"/>
+            </intent-filter>
+        </service>"""
+
+        if "us.mediagrid.capacitorjs.plugins.nativeaudio.AudioPlayerService" not in manifest:
+            manifest = manifest.replace(
+                "</application>",
+                service_block + "\n    </application>",
+                1
+            )
+
+        manifest_path.write_text(manifest, encoding="utf-8")
+
+        strings_path = Path(
+            "android/app/src/main/res/values/strings.xml"
+        )
+
+        strings_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if strings_path.exists():
+            strings = strings_path.read_text(encoding="utf-8")
+        else:
+            strings = "<resources>\n</resources>\n"
+
+        service_description = (
+            '<string name="audio_player_service_description">'
+            'Allows for audio to play in the background.'
+            '</string>'
+        )
+
+        if "audio_player_service_description" not in strings:
+            strings = strings.replace(
+                "</resources>",
+                f"    {service_description}\n</resources>"
+            )
+
+        strings_path.write_text(strings, encoding="utf-8")
+
+        print("Android Media3 service configured.")
+        print("Foreground service permissions configured.")
+        print("Audio service description configured.")
+        PY
+
+    - name: Verify Android Media Playback Configuration
+      working-directory: ${{ env.PROJECT_DIR }}
+      run: |
+        MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+        grep -q "android.permission.FOREGROUND_SERVICE" "$MANIFEST"
+        grep -q "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" "$MANIFEST"
+        grep -q "android.permission.WAKE_LOCK" "$MANIFEST"
+        grep -q "us.mediagrid.capacitorjs.plugins.nativeaudio.AudioPlayerService" "$MANIFEST"
+        grep -q "androidx.media3.session.MediaSessionService" "$MANIFEST"
+
+        grep -q "audio_player_service_description" \
+          android/app/src/main/res/values/strings.xml
+
+        echo "Android Media3 configuration: PASS"
+        echo "Lock-screen service: PASS"
+        echo "Foreground permissions: PASS"
+
     - name: Diagnose Lock-screen Next/Previous
       working-directory: ${{ env.PROJECT_DIR }}
       run: |
