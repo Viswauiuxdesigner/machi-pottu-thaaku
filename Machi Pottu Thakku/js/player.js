@@ -24,9 +24,23 @@ class AudioPlayer {
         this.playRequestId = 0;
         this.currentNativeSource = null;
         this.isDraggingNpProgress = false;
+        this.duration = 0;
 
         this.setupListeners();
         this.setupAudioEvents();
+    }
+
+    getTrackDuration() {
+        if (this.duration > 0 && isFinite(this.duration) && !isNaN(this.duration)) {
+            return this.duration;
+        }
+        if (this.currentTrack?.duration && Number(this.currentTrack.duration) > 0) {
+            return Number(this.currentTrack.duration);
+        }
+        if (this.audio && this.audio.duration > 0 && isFinite(this.audio.duration)) {
+            return this.audio.duration;
+        }
+        return 0;
     }
 
     setupListeners() {
@@ -85,32 +99,23 @@ class AudioPlayer {
                 const npPb = document.getElementById('np-progress-bar');
                 if (npPb) npPb.style.width = `${seekRatio * 100}%`;
 
-                if (dragDuration > 0) {
+                const duration = dragDuration > 0 ? dragDuration : this.getTrackDuration();
+                if (duration > 0) {
                     const npTc = document.getElementById('np-time-current');
-                    if (npTc) npTc.textContent = this.formatTime(seekRatio * dragDuration);
+                    if (npTc) npTc.textContent = this.formatTime(seekRatio * duration);
                 }
             };
 
-            npProgressContainer.addEventListener('pointerdown', async (e) => {
+            npProgressContainer.addEventListener('pointerdown', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 isSeeking = true;
                 this.isDraggingNpProgress = true;
-                npProgressContainer.setPointerCapture(e.pointerId);
+                try {
+                    npProgressContainer.setPointerCapture(e.pointerId);
+                } catch(err) {}
 
-                dragDuration = 0;
-                if (Capacitor.isNativePlatform() && this.nativeInitialized) {
-                    try {
-                        const dur = await NativeAudio.getDuration({ audioId: 'main' });
-                        dragDuration = dur.duration;
-                    } catch(err) {}
-                } else if (this.audio) {
-                    dragDuration = this.audio.duration;
-                }
-                if ((!dragDuration || isNaN(dragDuration)) && this.currentTrack?.duration) {
-                    dragDuration = this.currentTrack.duration;
-                }
-
+                dragDuration = this.getTrackDuration();
                 updateDragPosition(e.clientX);
             });
 
@@ -125,12 +130,16 @@ class AudioPlayer {
                 if (!isSeeking) return;
                 isSeeking = false;
 
-                if (npProgressContainer.hasPointerCapture(e.pointerId)) {
-                    npProgressContainer.releasePointerCapture(e.pointerId);
-                }
+                try {
+                    if (npProgressContainer.hasPointerCapture(e.pointerId)) {
+                        npProgressContainer.releasePointerCapture(e.pointerId);
+                    }
+                } catch(err) {}
 
-                if (dragDuration > 0) {
-                    const targetTime = seekRatio * dragDuration;
+                const duration = dragDuration > 0 ? dragDuration : this.getTrackDuration();
+                if (duration > 0) {
+                    const clampedRatio = Math.max(0, Math.min(1, seekRatio));
+                    const targetTime = Math.round(clampedRatio * duration);
                     if (Capacitor.isNativePlatform() && this.nativeInitialized) {
                         try {
                             await NativeAudio.seek({ audioId: 'main', timeInSeconds: targetTime });
@@ -180,21 +189,13 @@ class AudioPlayer {
     }
 
     async seekFromClick(e, container) {
-        let duration = 0;
-        if (Capacitor.isNativePlatform() && this.nativeInitialized) {
-            try {
-                const dur = await NativeAudio.getDuration({ audioId: 'main' });
-                duration = dur.duration;
-            } catch(e) {}
-        } else if (this.audio) {
-            duration = this.audio.duration;
-        }
-        
+        const duration = this.getTrackDuration();
         if (!duration || isNaN(duration) || duration <= 0) return;
         
         const rect = container.getBoundingClientRect();
-        const pos = (e.clientX - rect.left) / rect.width;
-        const targetTime = pos * duration;
+        if (!rect.width) return;
+        const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const targetTime = Math.round(pos * duration);
         
         if (Capacitor.isNativePlatform() && this.nativeInitialized) {
             try {
@@ -290,6 +291,19 @@ class AudioPlayer {
     }
 
     async playTrack(track, queueList = [], index = 0) {
+        if (!track?.s3Key && track?.id) {
+            let canonical = null;
+            if (window.app?.musicLibrary && window.app.musicLibrary.length > 0) {
+                canonical = window.app.musicLibrary.find(t => String(t.id) === String(track.id));
+            }
+            if (!canonical && window.OfflineManager && typeof window.OfflineManager.getLocalTrack === 'function') {
+                canonical = window.OfflineManager.getLocalTrack(track.id);
+            }
+            if (canonical && canonical.s3Key) {
+                track = { ...canonical, ...track, s3Key: canonical.s3Key };
+            }
+        }
+
         console.log("[RUNTIME TRACE] playTrack called with track:", track);
         console.log("[FILEBASE PLAYBACK] Track object:", track);
         console.log("[FILEBASE PLAYBACK] s3Key:", track ? track.s3Key : undefined);
@@ -609,6 +623,9 @@ class AudioPlayer {
     }
 
     updateProgress(current, total) {
+        if (total > 0 && isFinite(total) && !isNaN(total)) {
+            this.duration = total;
+        }
         if (this.isDraggingNpProgress) return;
         if (total > 0 && isFinite(total) && !isNaN(total)) {
             const percent = (current / total) * 100;
@@ -667,6 +684,7 @@ class AudioPlayer {
     
     updateDuration(total) {
         if (total > 0 && isFinite(total) && !isNaN(total)) {
+            this.duration = total;
             const tt = document.getElementById('time-total');
             if (tt) tt.textContent = this.formatTime(total);
             const npTt = document.getElementById('np-time-total');

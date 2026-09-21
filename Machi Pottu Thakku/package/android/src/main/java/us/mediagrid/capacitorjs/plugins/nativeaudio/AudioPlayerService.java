@@ -53,11 +53,53 @@ public class AudioPlayerService extends MediaSessionService {
                 return super.getAvailableCommands().buildUpon()
                         .add(androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT)
                         .add(androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS)
+                        .add(androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                        .add(androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                         .build();
             }
 
             @Override
+            public boolean isCommandAvailable(int command) {
+                if (command == androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT
+                        || command == androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS
+                        || command == androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM
+                        || command == androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) {
+                    return true;
+                }
+                return super.isCommandAvailable(command);
+            }
+
+            @Override
+            public boolean hasNextMediaItem() {
+                return true;
+            }
+
+            @Override
+            public boolean hasPreviousMediaItem() {
+                return true;
+            }
+
+            @Override
             public void seekToNext() {
+                triggerNext();
+            }
+
+            @Override
+            public void seekToNextMediaItem() {
+                triggerNext();
+            }
+
+            @Override
+            public void seekToPrevious() {
+                triggerPrevious();
+            }
+
+            @Override
+            public void seekToPreviousMediaItem() {
+                triggerPrevious();
+            }
+
+            private void triggerNext() {
                 AudioSources audioSources = getAudioSourcesFromMediaSession();
                 if (audioSources != null) {
                     AudioSource source = audioSources.forNotification();
@@ -67,8 +109,7 @@ public class AudioPlayerService extends MediaSessionService {
                 }
             }
 
-            @Override
-            public void seekToPrevious() {
+            private void triggerPrevious() {
                 AudioSources audioSources = getAudioSourcesFromMediaSession();
                 if (audioSources != null) {
                     AudioSource source = audioSources.forNotification();

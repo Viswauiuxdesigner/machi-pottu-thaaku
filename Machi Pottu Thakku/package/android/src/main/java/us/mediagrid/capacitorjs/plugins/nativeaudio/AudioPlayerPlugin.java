@@ -360,7 +360,11 @@ public class AudioPlayerPlugin extends Plugin {
             }
 
             postToLooper("seek", call, () -> {
-                audioSources.get(audioId(call)).seek(call.getInt("timeInSeconds"));
+                Double doubleTime = call.getDouble("timeInSeconds");
+                Integer intTime = call.getInt("timeInSeconds");
+                long timeInSeconds = doubleTime != null ? Math.round(doubleTime) : (intTime != null ? intTime.longValue() : 0L);
+
+                audioSources.get(audioId(call)).seek(timeInSeconds);
 
                 call.resolve();
             });

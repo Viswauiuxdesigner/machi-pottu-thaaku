@@ -616,7 +616,28 @@ class App {
     }
 
     loadFavorites() {
-        const tracks = window.storageManager.getFavorites();
+        const rawFavorites = window.storageManager.getFavorites();
+        const tracks = rawFavorites.map(fav => {
+            let canonical = null;
+            if (this.musicLibrary && this.musicLibrary.length > 0) {
+                canonical = this.musicLibrary.find(t => String(t.id) === String(fav.id));
+            }
+            if (!canonical && window.OfflineManager && typeof window.OfflineManager.getLocalTrack === 'function') {
+                canonical = window.OfflineManager.getLocalTrack(fav.id);
+            }
+            if (canonical) {
+                return {
+                    ...fav,
+                    ...canonical,
+                    s3Key: canonical.s3Key || fav.s3Key || '',
+                    title: canonical.title || fav.title,
+                    artist: canonical.artist || fav.artist,
+                    thumbnail: canonical.thumbnail || fav.thumbnail,
+                    duration: canonical.duration || fav.duration
+                };
+            }
+            return fav;
+        });
         window.uiManager.renderTrackList(tracks, 'favorites-results', "You haven't favorited any tracks yet.");
     }
     

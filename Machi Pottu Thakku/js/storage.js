@@ -32,7 +32,7 @@ class StorageManager {
                 artist: track.artist,
                 thumbnail: track.thumbnail,
                 duration: track.duration,
-                audioUrl: track.audioUrl
+                s3Key: track.s3Key || ''
             });
         }
         

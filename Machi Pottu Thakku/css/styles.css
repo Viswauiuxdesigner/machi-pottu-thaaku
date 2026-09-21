@@ -1526,8 +1526,8 @@ body {
 }
 
 .np-progress-bar-container {
-    height: 14px;
-    padding: 5px 0;
+    height: 24px;
+    padding: 10px 0;
     box-sizing: border-box;
     background-color: var(--surface-color);
     background-clip: content-box;
@@ -1538,6 +1538,7 @@ body {
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .np-progress-bar {

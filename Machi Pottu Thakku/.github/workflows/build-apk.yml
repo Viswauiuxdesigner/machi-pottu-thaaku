@@ -73,8 +73,9 @@ jobs:
         cp "$CUSTOM_SRC/AudioSource.java" "$NODE_SRC/"
         cp "$CUSTOM_SRC/AudioPlayerService.java" "$NODE_SRC/"
         cp "$CUSTOM_SRC/PlayerEventListener.java" "$NODE_SRC/"
+        cp "$CUSTOM_SRC/MediaSessionCallback.java" "$NODE_SRC/"
         
-        if [ ! -f "$NODE_SRC/AudioPlayerPlugin.java" ] || [ ! -f "$NODE_SRC/AudioSource.java" ] || [ ! -f "$NODE_SRC/AudioPlayerService.java" ] || [ ! -f "$NODE_SRC/PlayerEventListener.java" ]; then
+        if [ ! -f "$NODE_SRC/AudioPlayerPlugin.java" ] || [ ! -f "$NODE_SRC/AudioSource.java" ] || [ ! -f "$NODE_SRC/AudioPlayerService.java" ] || [ ! -f "$NODE_SRC/PlayerEventListener.java" ] || [ ! -f "$NODE_SRC/MediaSessionCallback.java" ]; then
           echo "ERROR: Copied files missing from destination directory."
           exit 1
         fi
@@ -89,8 +90,12 @@ jobs:
         grep -q "ForwardingPlayer" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing ForwardingPlayer"; exit 1; }
         grep -q "COMMAND_SEEK_TO_NEXT" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing COMMAND_SEEK_TO_NEXT"; exit 1; }
         grep -q "COMMAND_SEEK_TO_PREVIOUS" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing COMMAND_SEEK_TO_PREVIOUS"; exit 1; }
+        grep -q "COMMAND_SEEK_TO_NEXT_MEDIA_ITEM" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing COMMAND_SEEK_TO_NEXT_MEDIA_ITEM"; exit 1; }
+        grep -q "COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM"; exit 1; }
         grep -q "seekToNext" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing seekToNext"; exit 1; }
         grep -q "seekToPrevious" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing seekToPrevious"; exit 1; }
+        grep -q "seekToNextMediaItem" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing seekToNextMediaItem"; exit 1; }
+        grep -q "seekToPreviousMediaItem" "$NODE_SRC/AudioPlayerService.java" || { echo "Missing seekToPreviousMediaItem"; exit 1; }
         
         echo "Successfully copied and verified custom Java implementation."
 
