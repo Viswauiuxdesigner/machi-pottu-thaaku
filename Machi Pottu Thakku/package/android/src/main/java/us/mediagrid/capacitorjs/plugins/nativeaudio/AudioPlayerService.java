@@ -140,7 +140,7 @@ public class AudioPlayerService extends MediaSessionService {
 
     @OptIn(markerClass = UnstableApi.class)
     @Override
-    public boolean onUpdateNotification(MediaSession session, boolean startInForegroundRequired) {
+    public void onUpdateNotification(MediaSession session, boolean startInForegroundRequired) {
         AudioSources audioSources = getAudioSourcesFromMediaSession();
         if (audioSources != null) {
             AudioSource source = audioSources.forNotification();
@@ -150,10 +150,9 @@ public class AudioPlayerService extends MediaSessionService {
         }
 
         try {
-            return super.onUpdateNotification(session, startInForegroundRequired);
+            super.onUpdateNotification(session, startInForegroundRequired);
         } catch (Exception e) {
             Log.w(TAG, "Error updating notification in foreground", e);
-            return false;
         }
     }
 
