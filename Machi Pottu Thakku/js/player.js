@@ -345,57 +345,59 @@ class AudioPlayer {
         this.updateUI();
         
         try {
-            // Check Offline First
+            // Determine if track is intended for offline local playback
             let isOfflineTrack = false;
             let localUrls = null;
+
             if (window.OfflineManager) {
-                isOfflineTrack = await window.OfflineManager.isDownloaded(track.id);
+                const hasLocalRecord = !!(track.localPath || window.OfflineManager.getLocalTrack(track.id) || (track.s3Key && window.OfflineManager.getLocalTrack(track.s3Key)));
+                const isVerifiedOnDisk = await window.OfflineManager.isDownloaded(track.id) || (track.s3Key && await window.OfflineManager.isDownloaded(track.s3Key));
+                isOfflineTrack = hasLocalRecord || isVerifiedOnDisk;
             }
-            
+
             let finalUrl = null;
-            let isNativeUri = false;
-            
-            if (track._prefetchedUrl) {
-                console.log("[FILEBASE PLAYBACK] Using prefetched URL");
-                finalUrl = track._prefetchedUrl;
-                track._prefetchedUrl = null; // Clear it so it doesn't get stale if played again later
-            } else if (isOfflineTrack) {
-                console.log("[PLAYBACK] Playing local downloaded track");
-                localUrls = await window.OfflineManager.getLocalUrls(track.id);
-                if (localUrls) {
-                    if (Capacitor.isNativePlatform()) {
-                        finalUrl = localUrls.nativeUrl;
-                        isNativeUri = true;
-                    } else {
-                        finalUrl = localUrls.webViewUrl;
-                    }
-                }
-            }
-            
-            if (!finalUrl) {
-                // Check if user is completely offline and track is not downloaded
-                if (!navigator.onLine) {
-                    console.warn("[PLAYBACK] Offline and track not downloaded");
-                    window.uiManager.showNotification("Cannot play this song while offline", "error");
+
+            if (isOfflineTrack) {
+                console.log("[PLAYBACK] Resolving local downloaded track:", track.title);
+                localUrls = await window.OfflineManager.getLocalUrls(track.id || track.s3Key);
+
+                if (localUrls && (Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl)) {
+                    finalUrl = Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl;
+                    console.log("[PLAYBACK] Playing local verified audio:", finalUrl);
+                } else {
+                    // Critical Requirement 2: Do NOT silently fall back to online playback if local file is missing
+                    console.error("[PLAYBACK] Downloaded audio file is missing or corrupt for track:", track.id);
+                    window.uiManager.showNotification("Downloaded audio file is missing or corrupted.", "error");
                     this.syncUIState(false);
                     return;
                 }
+            } else {
+                // Online streaming path
+                if (track._prefetchedUrl) {
+                    console.log("[FILEBASE PLAYBACK] Using prefetched URL");
+                    finalUrl = track._prefetchedUrl;
+                    track._prefetchedUrl = null;
+                } else {
+                    if (!navigator.onLine) {
+                        console.warn("[PLAYBACK] Offline and track is not downloaded");
+                        window.uiManager.showNotification("Cannot play this song while offline. Download it first to listen offline.", "warning");
+                        this.syncUIState(false);
+                        return;
+                    }
 
-                console.log("[FILEBASE PLAYBACK] Requesting signed URL");
-                const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
-                console.log(`[FILEBASE PLAYBACK] Request URL: ${requestUrl}`);
-                
-                const response = await fetch(requestUrl);
-                if (!response.ok) {
-                    throw new Error("Failed to generate signed URL.");
+                    console.log("[FILEBASE PLAYBACK] Requesting signed URL");
+                    const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
+                    const response = await fetch(requestUrl);
+                    if (!response.ok) {
+                        throw new Error("Failed to generate signed URL (HTTP " + response.status + ")");
+                    }
+                    const data = await response.json();
+                    if (data.error) throw new Error(data.error);
+                    if (!data.url) throw new Error("No URL returned from server.");
+
+                    console.log("[FILEBASE PLAYBACK] Signed URL generated successfully");
+                    finalUrl = data.url;
                 }
-                const data = await response.json();
-                
-                if (data.error) throw new Error(data.error);
-                if (!data.url) throw new Error("No URL returned from server.");
-                
-                console.log("[FILEBASE PLAYBACK] Signed URL generated");
-                finalUrl = data.url;
             }
             
             if (currentReqId !== this.playRequestId) return; // Stale request
@@ -542,15 +544,18 @@ class AudioPlayer {
             
             let isOfflineTrack = false;
             if (window.OfflineManager) {
-                isOfflineTrack = await window.OfflineManager.isDownloaded(nextTrack.id);
+                isOfflineTrack = !!(nextTrack.localPath || window.OfflineManager.getLocalTrack(nextTrack.id) || (nextTrack.s3Key && window.OfflineManager.getLocalTrack(nextTrack.s3Key)));
+                if (!isOfflineTrack) {
+                    isOfflineTrack = (await window.OfflineManager.isDownloaded(nextTrack.id)) || (nextTrack.s3Key && await window.OfflineManager.isDownloaded(nextTrack.s3Key));
+                }
             }
             
             if (isOfflineTrack) {
                 try {
-                    const localUrls = await window.OfflineManager.getLocalUrls(nextTrack.id);
+                    const localUrls = await window.OfflineManager.getLocalUrls(nextTrack.id || nextTrack.s3Key);
                     if (localUrls) {
                         nextTrack._prefetchedUrl = Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl;
-                        console.log(`[PREFETCH] Prepared local URL for next track: ${nextTrack.title}`);
+                        console.log(`[PREFETCH] Prepared local verified URL for next track: ${nextTrack.title}`);
                     }
                 } catch (e) {
                     console.error("[PREFETCH] Failed to prepare local URL for next track", e);

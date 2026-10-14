@@ -38,16 +38,6 @@ class App {
         // Initialize Icons
         if (window.lucide) lucide.createIcons();
 
-        // Register Service Worker
-        if ('serviceWorker' in navigator) {
-            try {
-                await navigator.serviceWorker.register('/service-worker.js');
-                console.log('[SW] Service Worker Registered');
-            } catch (e) {
-                console.error('[SW] Service Worker Registration Failed', e);
-            }
-        }
-
         // Clear local storage for old youtube home data
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
@@ -56,13 +46,25 @@ class App {
             }
         }
 
-        // Fetch music library
-        await this.loadMusicLibrary();
+        // Hydrate library from persistent cache immediately for instant offline render
+        try {
+            const cachedLib = localStorage.getItem('mpt_cached_music_library') || sessionStorage.getItem('mpt_filebase_library');
+            if (cachedLib) {
+                const parsed = JSON.parse(cachedLib);
+                const songs = parsed.songs || parsed;
+                if (Array.isArray(songs) && songs.length > 0) {
+                    this.musicLibrary = songs;
+                    console.log(`[FILEBASE LIBRARY] Loaded ${this.musicLibrary.length} tracks from cache`);
+                }
+            }
+        } catch (e) {
+            console.warn("[FILEBASE LIBRARY] Cache hydration error:", e);
+        }
 
         // Setup Android Back Button Listener (Capacitor & Webview fallback)
         this.setupBackButton();
 
-        // Setup Navigation Listeners
+        // Setup Navigation Listeners (Available immediately offline)
         document.querySelectorAll('.nav-item').forEach(el => {
             el.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -108,7 +110,10 @@ class App {
         this.setupSearch();
         
         // Setup Network Listeners
-        window.addEventListener('online', () => this.updateNetworkStatus(true));
+        window.addEventListener('online', () => {
+            this.updateNetworkStatus(true);
+            this.loadMusicLibrary(); // Auto-refresh when coming back online
+        });
         window.addEventListener('offline', () => this.updateNetworkStatus(false));
         this.updateNetworkStatus(navigator.onLine);
         
@@ -133,14 +138,38 @@ class App {
             });
         }
         
-        // Load initial data
+        // Load initial data from cache immediately (doesn't block UI)
         this.loadHomeData();
+
+        // Register Service Worker in background
+        if ('serviceWorker' in navigator) {
+            try {
+                navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+            } catch (e) {}
+        }
+
+        // Fetch fresh music library in background without blocking app startup
+        this.loadMusicLibrary();
     }
 
     async loadMusicLibrary(forceRefresh = false) {
-        console.log("[FILEBASE LIBRARY] Loading library");
+        console.log("[FILEBASE LIBRARY] Loading library (background/online)");
+
+        // If offline and we already have cached library, do not attempt failing network request
+        if (!navigator.onLine && this.musicLibrary.length > 0 && !forceRefresh) {
+            console.log("[FILEBASE LIBRARY] Running offline with cached library");
+            return;
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+
         try {
-            const response = await fetch(window.getApiUrl('/.netlify/functions/music-library'));
+            const response = await fetch(window.getApiUrl('/.netlify/functions/music-library'), {
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
             if (!response.ok) throw new Error('Failed to load music library from serverless function');
             const data = await response.json();
             
@@ -148,29 +177,39 @@ class App {
 
             this.musicLibrary = data.songs || [];
             
-            // Cache it
-            sessionStorage.setItem('mpt_filebase_library', JSON.stringify({
+            // Persist to both localStorage and sessionStorage
+            const cachePayload = JSON.stringify({
                 timestamp: Date.now(),
                 songs: this.musicLibrary
-            }));
+            });
+            try {
+                localStorage.setItem('mpt_cached_music_library', cachePayload);
+            } catch (e) {}
+            try {
+                sessionStorage.setItem('mpt_filebase_library', cachePayload);
+            } catch (e) {}
             
-            console.log(`[FILEBASE LIBRARY] Objects found: ${this.musicLibrary.length}`);
-            console.log(`[FILEBASE LIBRARY] Audio files: ${this.musicLibrary.length}`);
-            console.log("[FILEBASE LIBRARY] Library ready");
-        } catch (error) {
-            console.error('[FILEBASE LIBRARY] Error loading music library:', error);
-            
-            // Fallback to cache if network fails
-            const cachedStr = sessionStorage.getItem('mpt_filebase_library');
-            if (cachedStr) {
-                const cachedData = JSON.parse(cachedStr);
-                if (cachedData && cachedData.songs && cachedData.songs.length > 0) {
-                    this.musicLibrary = cachedData.songs;
-                    console.log("[FILEBASE LIBRARY] Loaded from local cache as fallback");
-                    return;
-                }
+            console.log(`[FILEBASE LIBRARY] Loaded ${this.musicLibrary.length} songs from server`);
+
+            // Refresh Home screen if currently visible
+            const homePage = document.getElementById('page-home');
+            if (homePage && homePage.classList.contains('active')) {
+                this.loadHomeData();
             }
-            window.uiManager.showNotification("Failed to load music library. Backend credentials might be missing.", "error");
+        } catch (error) {
+            clearTimeout(timeoutId);
+            console.warn('[FILEBASE LIBRARY] Notice:', error.message || error);
+            
+            // If offline, silently preserve existing cache
+            if (!navigator.onLine || error.name === 'AbortError') {
+                console.log("[FILEBASE LIBRARY] Offline mode active; preserved cached library.");
+                return;
+            }
+
+            // Only notify if online and request truly errored on server
+            if (this.musicLibrary.length === 0) {
+                window.uiManager.showNotification("Unable to reach music server. You can still play your Downloads.", "info");
+            }
         }
     }
 
@@ -178,10 +217,14 @@ class App {
         const index = this.musicLibrary.findIndex(t => t.id === updatedTrack.id);
         if (index !== -1) {
             this.musicLibrary[index] = updatedTrack;
-            sessionStorage.setItem('mpt_filebase_library', JSON.stringify({
+            const cachePayload = JSON.stringify({
                 timestamp: Date.now(),
                 songs: this.musicLibrary
-            }));
+            });
+            try {
+                localStorage.setItem('mpt_cached_music_library', cachePayload);
+                sessionStorage.setItem('mpt_filebase_library', cachePayload);
+            } catch (e) {}
         }
     }
 
@@ -620,10 +663,10 @@ class App {
         const tracks = rawFavorites.map(fav => {
             let canonical = null;
             if (this.musicLibrary && this.musicLibrary.length > 0) {
-                canonical = this.musicLibrary.find(t => String(t.id) === String(fav.id));
+                canonical = this.musicLibrary.find(t => String(t.id) === String(fav.id) || (t.s3Key && fav.s3Key && t.s3Key === fav.s3Key));
             }
             if (!canonical && window.OfflineManager && typeof window.OfflineManager.getLocalTrack === 'function') {
-                canonical = window.OfflineManager.getLocalTrack(fav.id);
+                canonical = window.OfflineManager.getLocalTrack(fav.id) || (fav.s3Key ? window.OfflineManager.getLocalTrack(fav.s3Key) : null);
             }
             if (canonical) {
                 return {

@@ -145,6 +145,13 @@ class UIManager {
             return;
         }
 
+        // Avoid unnecessary network calls if offline or if track is an offline download
+        const isOffline = !navigator.onLine || track.localPath || (window.OfflineManager && (window.OfflineManager.getLocalTrack(track.id) || (track.s3Key && window.OfflineManager.getLocalTrack(track.s3Key))));
+        if (isOffline) {
+            if (durationElement) durationElement.textContent = '--:--';
+            return;
+        }
+
         try {
             const response = await fetch(window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`));
             if (!response.ok) return;
@@ -168,7 +175,7 @@ class UIManager {
             });
             tempAudio.src = data.url;
         } catch (e) {
-            console.error("Metadata load error", e);
+            // Silently ignore network metadata errors when offline
         }
     }
 
@@ -180,8 +187,8 @@ class UIManager {
         row.className = 'track-row' + (lastPlayedId && track.id === lastPlayedId ? ' last-played-highlight' : '');
         row.dataset.id = track.id;
         
-        const artworkHtml = track.thumbnail ? 
-            `<img src="${track.thumbnail}" class="track-artwork" loading="lazy">` : 
+        const artworkHtml = track.thumbnail ?
+            `<img src="${track.thumbnail}" class="track-artwork" loading="lazy" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';"><div class="track-artwork placeholder" style="display:none;"><i data-lucide="music"></i></div>` :
             `<div class="track-artwork placeholder"><i data-lucide="music"></i></div>`;
             
         let actionsHtml = '';
