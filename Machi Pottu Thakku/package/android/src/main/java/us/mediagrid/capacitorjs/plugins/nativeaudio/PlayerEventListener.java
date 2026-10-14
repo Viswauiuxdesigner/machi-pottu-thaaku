@@ -47,13 +47,11 @@ public class PlayerEventListener implements Listener {
     @Override
     public void onPlaybackStateChanged(@State int playbackState) {
         if (playbackState == STATE_READY) {
-            audioSource.releaseTransitionWakeLock();
             makeCall(audioSource.onReadyCallbackId);
         }
 
         if (playbackState == STATE_ENDED) {
             audioSource.acquireTransitionWakeLock();
-            audioSource.getPlayer().seekToDefaultPosition();
             audioSource.setIsStopped();
             audioSource.audioMetadata.stopUpdater();
 

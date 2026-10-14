@@ -138,6 +138,25 @@ public class AudioPlayerService extends MediaSessionService {
         return mediaSession;
     }
 
+    @OptIn(markerClass = UnstableApi.class)
+    @Override
+    public boolean onUpdateNotification(MediaSession session, boolean startInForegroundRequired) {
+        AudioSources audioSources = getAudioSourcesFromMediaSession();
+        if (audioSources != null) {
+            AudioSource source = audioSources.forNotification();
+            if (source != null && (source.isTransitioning() || source.isPlaying())) {
+                startInForegroundRequired = true;
+            }
+        }
+
+        try {
+            return super.onUpdateNotification(session, startInForegroundRequired);
+        } catch (Exception e) {
+            Log.w(TAG, "Error updating notification in foreground", e);
+            return false;
+        }
+    }
+
     @Override
     public void onTaskRemoved(@Nullable Intent rootIntent) {
         Log.i(TAG, "Task removed");

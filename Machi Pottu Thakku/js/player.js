@@ -355,7 +355,11 @@ class AudioPlayer {
             let finalUrl = null;
             let isNativeUri = false;
             
-            if (isOfflineTrack) {
+            if (track._prefetchedUrl) {
+                console.log("[FILEBASE PLAYBACK] Using prefetched URL");
+                finalUrl = track._prefetchedUrl;
+                track._prefetchedUrl = null; // Clear it so it doesn't get stale if played again later
+            } else if (isOfflineTrack) {
                 console.log("[PLAYBACK] Playing local downloaded track");
                 localUrls = await window.OfflineManager.getLocalUrls(track.id);
                 if (localUrls) {
@@ -366,10 +370,6 @@ class AudioPlayer {
                         finalUrl = localUrls.webViewUrl;
                     }
                 }
-            } else if (track._prefetchedUrl) {
-                console.log("[FILEBASE PLAYBACK] Using prefetched signed URL");
-                finalUrl = track._prefetchedUrl;
-                track._prefetchedUrl = null; // Clear it so it doesn't get stale if played again later
             }
             
             if (!finalUrl) {
@@ -545,7 +545,17 @@ class AudioPlayer {
                 isOfflineTrack = await window.OfflineManager.isDownloaded(nextTrack.id);
             }
             
-            if (!isOfflineTrack && navigator.onLine && !nextTrack._prefetchedUrl) {
+            if (isOfflineTrack) {
+                try {
+                    const localUrls = await window.OfflineManager.getLocalUrls(nextTrack.id);
+                    if (localUrls) {
+                        nextTrack._prefetchedUrl = Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl;
+                        console.log(`[PREFETCH] Prepared local URL for next track: ${nextTrack.title}`);
+                    }
+                } catch (e) {
+                    console.error("[PREFETCH] Failed to prepare local URL for next track", e);
+                }
+            } else if (navigator.onLine && !nextTrack._prefetchedUrl) {
                 try {
                     const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(nextTrack.s3Key)}`);
                     const response = await fetch(requestUrl);

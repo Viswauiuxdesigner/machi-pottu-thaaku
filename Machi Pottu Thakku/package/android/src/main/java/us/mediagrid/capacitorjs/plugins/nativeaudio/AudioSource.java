@@ -346,4 +346,8 @@ public class AudioSource extends Binder {
             Log.e(TAG, "Error releasing transition WakeLock", e);
         }
     }
+
+    public synchronized boolean isTransitioning() {
+        return transitionWakeLock != null && transitionWakeLock.isHeld();
+    }
 }
