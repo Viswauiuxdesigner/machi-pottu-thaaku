@@ -94,7 +94,7 @@ public class AudioSource extends Binder {
 
         Player player = getPlayer();
 
-        player.setMediaItem(buildMediaItem());
+        player.setMediaItem(buildMediaItem(), true);
         player.setPlayWhenReady(false);
         player.prepare();
     }

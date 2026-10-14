@@ -104,12 +104,16 @@ class OfflineManagerClass {
         return Object.values(this.offlineTracks).sort((a, b) => (b.downloadedAt || 0) - (a.downloadedAt || 0));
     }
 
-    findTrackEntry(trackId) {
-        if (!trackId) return null;
-        if (this.offlineTracks[trackId]) return this.offlineTracks[trackId];
-        // Fallback: match by s3Key if trackId changed across sessions
+    findTrackEntry(trackIdentifier) {
+        if (!trackIdentifier) return null;
         const entries = Object.values(this.offlineTracks);
-        return entries.find(t => t.s3Key === trackId || String(t.id) === String(trackId)) || null;
+        // 1. Match by canonical s3Key (permanent across library order/indexing changes)
+        const matchByKey = entries.find(t => t.s3Key && t.s3Key === trackIdentifier);
+        if (matchByKey) return matchByKey;
+        // 2. Direct key lookup in map
+        if (this.offlineTracks[trackIdentifier]) return this.offlineTracks[trackIdentifier];
+        // 3. Fallback match by id
+        return entries.find(t => String(t.id) === String(trackIdentifier)) || null;
     }
 
     async isDownloaded(trackId) {
@@ -147,6 +151,15 @@ class OfflineManagerClass {
         }
 
         try {
+            const stat = await this.Filesystem.stat({
+                path: track.localPath,
+                directory: this.Directory.Data
+            });
+
+            if (!stat || typeof stat.size !== 'number' || stat.size <= 0) {
+                return null;
+            }
+
             const uriResult = await this.Filesystem.getUri({
                 path: track.localPath,
                 directory: this.Directory.Data

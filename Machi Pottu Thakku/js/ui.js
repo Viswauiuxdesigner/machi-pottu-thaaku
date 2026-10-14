@@ -235,13 +235,17 @@ class UIManager {
         playBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             console.log("[UI] PLAY TRACK");
-            window.player.playTrack(track, queueList, index);
+            const trackToPlay = isDownloadsView ? { ...track, _fromDownloads: true } : track;
+            const queueToPlay = isDownloadsView ? queueList.map(t => ({ ...t, _fromDownloads: true })) : queueList;
+            window.player.playTrack(trackToPlay, queueToPlay, index);
         });
         
         // Row click plays track
         row.addEventListener('click', () => {
             console.log("[UI] PLAY TRACK");
-            window.player.playTrack(track, queueList, index);
+            const trackToPlay = isDownloadsView ? { ...track, _fromDownloads: true } : track;
+            const queueToPlay = isDownloadsView ? queueList.map(t => ({ ...t, _fromDownloads: true })) : queueList;
+            window.player.playTrack(trackToPlay, queueToPlay, index);
         });
         
         const favBtn = row.querySelector('.action-fav');

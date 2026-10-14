@@ -350,22 +350,29 @@ class AudioPlayer {
             let localUrls = null;
 
             if (window.OfflineManager) {
-                const hasLocalRecord = !!(track.localPath || window.OfflineManager.getLocalTrack(track.id) || (track.s3Key && window.OfflineManager.getLocalTrack(track.s3Key)));
-                const isVerifiedOnDisk = await window.OfflineManager.isDownloaded(track.id) || (track.s3Key && await window.OfflineManager.isDownloaded(track.s3Key));
-                isOfflineTrack = hasLocalRecord || isVerifiedOnDisk;
+                const isVerified = (track.s3Key && await window.OfflineManager.isDownloaded(track.s3Key)) ||
+                                   (await window.OfflineManager.isDownloaded(track.id));
+
+                if (isVerified) {
+                    isOfflineTrack = true;
+                } else if (track._fromDownloads) {
+                    // Explicitly selected from Downloads view, but local file is missing/corrupt
+                    isOfflineTrack = true;
+                }
             }
 
             let finalUrl = null;
 
             if (isOfflineTrack) {
                 console.log("[PLAYBACK] Resolving local downloaded track:", track.title);
-                localUrls = await window.OfflineManager.getLocalUrls(track.id || track.s3Key);
+                localUrls = (track.s3Key && await window.OfflineManager.getLocalUrls(track.s3Key)) ||
+                            (await window.OfflineManager.getLocalUrls(track.id));
 
                 if (localUrls && (Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl)) {
                     finalUrl = Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl;
                     console.log("[PLAYBACK] Playing local verified audio:", finalUrl);
                 } else {
-                    // Critical Requirement 2: Do NOT silently fall back to online playback if local file is missing
+                    // Critical Requirement 2: Do NOT silently fall back to online playback if local file is missing from Downloads
                     console.error("[PLAYBACK] Downloaded audio file is missing or corrupt for track:", track.id);
                     window.uiManager.showNotification("Downloaded audio file is missing or corrupted.", "error");
                     this.syncUIState(false);
@@ -544,15 +551,17 @@ class AudioPlayer {
             
             let isOfflineTrack = false;
             if (window.OfflineManager) {
-                isOfflineTrack = !!(nextTrack.localPath || window.OfflineManager.getLocalTrack(nextTrack.id) || (nextTrack.s3Key && window.OfflineManager.getLocalTrack(nextTrack.s3Key)));
-                if (!isOfflineTrack) {
-                    isOfflineTrack = (await window.OfflineManager.isDownloaded(nextTrack.id)) || (nextTrack.s3Key && await window.OfflineManager.isDownloaded(nextTrack.s3Key));
+                isOfflineTrack = (nextTrack.s3Key && await window.OfflineManager.isDownloaded(nextTrack.s3Key)) ||
+                                 (await window.OfflineManager.isDownloaded(nextTrack.id));
+                if (!isOfflineTrack && nextTrack._fromDownloads) {
+                    isOfflineTrack = true;
                 }
             }
             
             if (isOfflineTrack) {
                 try {
-                    const localUrls = await window.OfflineManager.getLocalUrls(nextTrack.id || nextTrack.s3Key);
+                    const localUrls = (nextTrack.s3Key && await window.OfflineManager.getLocalUrls(nextTrack.s3Key)) ||
+                                      (await window.OfflineManager.getLocalUrls(nextTrack.id));
                     if (localUrls) {
                         nextTrack._prefetchedUrl = Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl;
                         console.log(`[PREFETCH] Prepared local verified URL for next track: ${nextTrack.title}`);
