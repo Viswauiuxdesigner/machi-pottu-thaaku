@@ -79,6 +79,11 @@ public class AudioPlayerPlugin extends Plugin {
                 call.getBoolean("loop", false)
             );
 
+            String initialTrackId = call.getString("trackId");
+            if (initialTrackId != null && !initialTrackId.isEmpty()) {
+                audioSource.trackId = initialTrackId;
+            }
+
             if (audioSources.count() == 0 && !audioSource.useForNotification) {
                 throw new RuntimeException(
                     "An audio source with useForNotification = true must exist first."
@@ -223,14 +228,45 @@ public class AudioPlayerPlugin extends Plugin {
             }
 
             AudioSource audioSource = audioSources.get(audioId(call));
+            String newSource = call.getString("source");
+            String trackId = call.getString("trackId");
 
             postToLooper("changeAudioSource", call, () -> {
-                audioSource.changeAudioSource(call.getString("source"));
+                audioSource.changeAudioSource(newSource, trackId);
 
                 call.resolve();
             });
         } catch (Exception ex) {
             call.reject("There was an issue changing the audio source.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void queueNext(PluginCall call) {
+        try {
+            if (!audioSourceExists("queueNext", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            String nextSource = call.getString("source");
+            String nextTrackId = call.getString("trackId");
+            String expectedCurrentTrackId = call.getString("expectedCurrentTrackId");
+            AudioMetadata nextMetadata = new AudioMetadata(
+                call.getString("albumTitle"),
+                call.getString("artistName"),
+                call.getString("friendlyTitle"),
+                call.getString("artworkSource"),
+                null,
+                null
+            );
+
+            postToLooper("queueNext", call, () -> {
+                audioSource.queueNext(nextSource, nextMetadata, nextTrackId, expectedCurrentTrackId);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue queuing the next track.", ex);
         }
     }
 
@@ -719,5 +755,9 @@ public class AudioPlayerPlugin extends Plugin {
 
     public void emitAudioEndEvent() {
         notifyListeners("nativeAudioEnd", new JSObject());
+    }
+
+    public void emitTrackTransitionEvent(JSObject data) {
+        notifyListeners("nativeTrackTransition", data != null ? data : new JSObject());
     }
 }

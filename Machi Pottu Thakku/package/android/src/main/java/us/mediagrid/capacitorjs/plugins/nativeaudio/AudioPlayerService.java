@@ -100,6 +100,12 @@ public class AudioPlayerService extends MediaSessionService {
             }
 
             private void triggerNext() {
+                if (getMediaItemCount() > 1 && getCurrentMediaItemIndex() < getMediaItemCount() - 1) {
+                    Log.i(TAG, "Native next: advancing to queued media item directly in ExoPlayer");
+                    super.seekToNextMediaItem();
+                    return;
+                }
+                Log.i(TAG, "Native next: no queued item in native playlist, forwarding to JS");
                 AudioSources audioSources = getAudioSourcesFromMediaSession();
                 if (audioSources != null) {
                     AudioSource source = audioSources.forNotification();
@@ -110,6 +116,12 @@ public class AudioPlayerService extends MediaSessionService {
             }
 
             private void triggerPrevious() {
+                if (getCurrentPosition() > 3000) {
+                    Log.i(TAG, "Native previous: seeking to start of current track (pos > 3s)");
+                    super.seekTo(0);
+                    return;
+                }
+                Log.i(TAG, "Native previous: position <= 3s, forwarding to JS with WakeLock");
                 AudioSources audioSources = getAudioSourcesFromMediaSession();
                 if (audioSources != null) {
                     AudioSource source = audioSources.forNotification();

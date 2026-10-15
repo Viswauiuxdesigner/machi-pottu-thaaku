@@ -1,6 +1,9 @@
 package us.mediagrid.capacitorjs.plugins.nativeaudio;
 
+import android.util.Log;
 import static androidx.media3.common.Player.*;
+import androidx.annotation.Nullable;
+import androidx.media3.common.MediaItem;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginCall;
@@ -23,7 +26,12 @@ public class PlayerEventListener implements Listener {
         String status = "stopped";
 
         if (audioSource.isInitialized()) {
-            if (
+            if (isPlaying) {
+                status = "playing";
+                audioSource.setIsPlaying();
+                audioSource.releaseTransitionWakeLock();
+                audioSource.audioMetadata.startUpdater();
+            } else if (
                 audioSource.getPlayer().getPlaybackState() == STATE_READY &&
                 !audioSource.getPlayer().getPlayWhenReady() &&
                 !audioSource.isStopped()
@@ -31,12 +39,19 @@ public class PlayerEventListener implements Listener {
                 status = "paused";
                 audioSource.setIsPaused();
                 audioSource.audioMetadata.stopUpdater();
-            } else if (isPlaying || audioSource.isPlaying()) {
-                status = "playing";
-                audioSource.setIsPlaying();
-                audioSource.audioMetadata.startUpdater();
+            } else if (audioSource.getPlayer().getPlaybackState() == STATE_ENDED) {
+                status = "stopped";
+                audioSource.setIsStopped();
+                audioSource.audioMetadata.stopUpdater();
+            } else if (
+                audioSource.getPlayer().getPlaybackState() == STATE_BUFFERING &&
+                audioSource.getPlayer().getPlayWhenReady()
+            ) {
+                status = "buffering";
             }
         }
+
+        Log.d(TAG, "onIsPlayingChanged: isPlaying=" + isPlaying + " -> status=" + status);
 
         makeCall(
             audioSource.onPlaybackStatusChangeCallbackId,
@@ -46,6 +61,8 @@ public class PlayerEventListener implements Listener {
 
     @Override
     public void onPlaybackStateChanged(@State int playbackState) {
+        Log.d(TAG, "onPlaybackStateChanged: state=" + playbackState);
+
         if (playbackState == STATE_READY) {
             makeCall(audioSource.onReadyCallbackId);
         }
@@ -60,6 +77,59 @@ public class PlayerEventListener implements Listener {
                 plugin.emitAudioEndEvent();
             }
         }
+    }
+
+    @Override
+    public void onMediaItemTransition(
+        @Nullable MediaItem mediaItem,
+        @MediaItemTransitionReason int reason
+    ) {
+        Log.i(TAG, "onMediaItemTransition: reason=" + reason);
+
+        if ((reason == MEDIA_ITEM_TRANSITION_REASON_AUTO || reason == MEDIA_ITEM_TRANSITION_REASON_SEEK) && mediaItem != null) {
+            String fromTrackId = audioSource.trackId;
+            String transitionedTrackId = mediaItem.mediaId;
+            String transitionedSource = null;
+            if (mediaItem.localConfiguration != null && mediaItem.localConfiguration.uri != null) {
+                transitionedSource = mediaItem.localConfiguration.uri.toString();
+            }
+
+            Log.i(
+                TAG,
+                "Native track transition occurred: reason=" +
+                reason +
+                ", from=" +
+                fromTrackId +
+                ", to=" +
+                transitionedTrackId +
+                ", uri=" +
+                transitionedSource
+            );
+            audioSource.acquireTransitionWakeLock();
+            audioSource.updateCurrentMedia(mediaItem);
+
+            if (plugin != null) {
+                JSObject data = new JSObject();
+                data.put("reason", reason == MEDIA_ITEM_TRANSITION_REASON_AUTO ? "auto" : "seek");
+                data.put("fromTrackId", fromTrackId != null ? fromTrackId : "");
+                data.put("trackId", transitionedTrackId != null ? transitionedTrackId : "");
+                data.put("source", transitionedSource != null ? transitionedSource : "");
+                plugin.emitTrackTransitionEvent(data);
+            }
+        }
+    }
+
+    @Override
+    public void onPlayerError(androidx.media3.common.PlaybackException error) {
+        Log.e(TAG, "onPlayerError: " + error.getMessage(), error);
+        audioSource.releaseTransitionWakeLock();
+        audioSource.setIsStopped();
+        audioSource.audioMetadata.stopUpdater();
+
+        makeCall(
+            audioSource.onPlaybackStatusChangeCallbackId,
+            new JSObject().put("status", "error").put("errorMessage", error.getMessage())
+        );
     }
 
     private void makeCall(String callbackId) {

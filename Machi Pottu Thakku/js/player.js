@@ -23,8 +23,12 @@ class AudioPlayer {
         this.nativeReady = false;
         this.playRequestId = 0;
         this.currentNativeSource = null;
+        this.currentNativeTrackId = null;
+        this.hasPlaybackError = false;
         this.isDraggingNpProgress = false;
+        this.isTransitioning = false;
         this.duration = 0;
+        this.playbackGeneration = 0;
 
         this.setupListeners();
         this.setupAudioEvents();
@@ -242,6 +246,10 @@ class AudioPlayer {
                 console.log("[NATIVE AUDIO] Lock-screen / Native track ended event received");
                 this.handleTrackEnded();
             });
+            NativeAudio.addListener('nativeTrackTransition', (data) => {
+                console.log("[NATIVE AUDIO] Lock-screen / Native track transition received", data);
+                this.handleNativeTrackTransition(data);
+            });
             
             // Periodically sync progress from native audio
             setInterval(async () => {
@@ -253,7 +261,7 @@ class AudioPlayer {
                             const dur = await NativeAudio.getDuration({ audioId: 'main' });
                             duration = dur.duration;
                         } catch(e) {}
-                        
+
                         this.updateProgress(currentTime, duration);
                     } catch(e) {}
                 }
@@ -311,7 +319,8 @@ class AudioPlayer {
         if (!track?.s3Key) {
             console.error("[FILEBASE PLAYBACK] Missing s3Key", track);
             window.uiManager.showNotification("Unable to play this song. File key is missing.", "error");
-            return;
+            this.isTransitioning = false;
+            return false;
         }
 
         this.currentTrack = track;
@@ -319,6 +328,8 @@ class AudioPlayer {
         
         // Anti-race mechanism
         this.playRequestId++;
+        this.playbackGeneration++;
+        this.hasPlaybackError = false;
         const currentReqId = this.playRequestId;
         
         // Stop current loading/playback if switching
@@ -376,38 +387,53 @@ class AudioPlayer {
                     console.error("[PLAYBACK] Downloaded audio file is missing or corrupt for track:", track.id);
                     window.uiManager.showNotification("Downloaded audio file is missing or corrupted.", "error");
                     this.syncUIState(false);
-                    return;
+                    return false;
                 }
             } else {
-                // Online streaming path
-                if (track._prefetchedUrl) {
-                    console.log("[FILEBASE PLAYBACK] Using prefetched URL");
+                // Online streaming path: validate cached signed URL freshness (< 45 minutes)
+                const isUrlExpired = track._prefetchedAt && (Date.now() - track._prefetchedAt > 45 * 60 * 1000);
+                if (track._prefetchedUrl && !isUrlExpired) {
+                    console.log("[MPT_DIAG] Using prefetched signed URL for track ID:", track.id);
                     finalUrl = track._prefetchedUrl;
                     track._prefetchedUrl = null;
+                    track._prefetchedAt = null;
                 } else {
+                    if (isUrlExpired) {
+                        console.log("[MPT_DIAG] Prefetched URL expired (>45m), refreshing for track ID:", track.id);
+                        track._prefetchedUrl = null;
+                        track._prefetchedAt = null;
+                    }
                     if (!navigator.onLine) {
                         console.warn("[PLAYBACK] Offline and track is not downloaded");
                         window.uiManager.showNotification("Cannot play this song while offline. Download it first to listen offline.", "warning");
                         this.syncUIState(false);
-                        return;
+                        return false;
                     }
 
-                    console.log("[FILEBASE PLAYBACK] Requesting signed URL");
-                    const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
-                    const response = await fetch(requestUrl);
-                    if (!response.ok) {
-                        throw new Error("Failed to generate signed URL (HTTP " + response.status + ")");
-                    }
-                    const data = await response.json();
-                    if (data.error) throw new Error(data.error);
-                    if (!data.url) throw new Error("No URL returned from server.");
+                    console.log("[MPT_DIAG] Requesting signed URL for track ID:", track.id);
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 8000);
+                    try {
+                        const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
+                        const response = await fetch(requestUrl, { signal: controller.signal });
+                        clearTimeout(timeoutId);
+                        if (!response.ok) {
+                            throw new Error("Failed to generate signed URL (HTTP " + response.status + ")");
+                        }
+                        const data = await response.json();
+                        if (data.error) throw new Error(data.error);
+                        if (!data.url) throw new Error("No URL returned from server.");
 
-                    console.log("[FILEBASE PLAYBACK] Signed URL generated successfully");
-                    finalUrl = data.url;
+                        console.log("[MPT_DIAG] Signed URL generated successfully for track ID:", track.id);
+                        finalUrl = data.url;
+                    } catch (fetchErr) {
+                        clearTimeout(timeoutId);
+                        throw fetchErr;
+                    }
                 }
             }
             
-            if (currentReqId !== this.playRequestId) return; // Stale request
+            if (currentReqId !== this.playRequestId) return false; // Stale request
             
             if (Capacitor.isNativePlatform()) {
                 if (!this.nativeInitialized) {
@@ -415,6 +441,7 @@ class AudioPlayer {
                     const res = await NativeAudio.create({
                         audioId: 'main',
                         audioSource: finalUrl,
+                        trackId: String(track.id),
                         friendlyTitle: track.title,
                         artistName: track.artist,
                         artworkSource: track.thumbnail || '',
@@ -424,12 +451,24 @@ class AudioPlayer {
                     if (res && res.success === false) throw new Error("Failed to create NativeAudio");
                     this.nativeInitialized = true;
                     this.currentNativeSource = finalUrl;
+                    this.currentNativeTrackId = String(track.id);
                     
                     if (!this.nativeCallbacksRegistered) {
                         console.log("[NATIVE AUDIO] Registering lifecycle callbacks for 'main' source");
                         NativeAudio.onPlaybackStatusChange({ audioId: 'main' }, (result) => {
-                            if (result.status === 'playing') this.syncUIState(true);
-                            else this.syncUIState(false);
+                            if (result.status === 'playing') {
+                                this.syncUIState(true);
+                            } else if (result.status === 'paused' || result.status === 'stopped' || result.status === 'error') {
+                                this.syncUIState(false);
+                                if (result.status === 'error') {
+                                    this.hasPlaybackError = true;
+                                    if (this.currentTrack) {
+                                        this.currentTrack._prefetchedUrl = null;
+                                        this.currentTrack._prefetchedAt = null;
+                                    }
+                                    window.uiManager.showNotification("Audio playback error. Tap play to retry.", "error");
+                                }
+                            }
                         });
                         NativeAudio.onAudioEnd({ audioId: 'main' }, () => {
                             this.handleTrackEnded();
@@ -442,27 +481,43 @@ class AudioPlayer {
                     
                     console.log("[NATIVE AUDIO] initialize player");
                     await NativeAudio.initialize({ audioId: 'main' });
-                } else if (this.currentNativeSource !== finalUrl) {
-                    console.log("[NATIVE AUDIO] changeAudioSource");
-                    await NativeAudio.changeAudioSource({
-                        audioId: 'main',
-                        source: finalUrl
-                    });
-                    console.log("[NATIVE AUDIO] changeMetadata");
-                    await NativeAudio.changeMetadata({
-                        audioId: 'main',
-                        friendlyTitle: track.title,
-                        artistName: track.artist,
-                        artworkSource: track.thumbnail || ''
-                    });
-                    this.currentNativeSource = finalUrl;
+                } else {
+                    const sourceChanged = this.currentNativeSource !== finalUrl;
+                    const trackChanged = this.currentNativeTrackId !== String(track.id);
+
+                    if (sourceChanged || trackChanged) {
+                        console.log(`[NATIVE AUDIO] changeAudioSource: sourceChanged=${sourceChanged}, trackChanged=${trackChanged}`);
+                        await NativeAudio.changeAudioSource({
+                            audioId: 'main',
+                            source: finalUrl,
+                            trackId: String(track.id)
+                        });
+                        console.log("[NATIVE AUDIO] changeMetadata");
+                        await NativeAudio.changeMetadata({
+                            audioId: 'main',
+                            friendlyTitle: track.title,
+                            artistName: track.artist,
+                            artworkSource: track.thumbnail || ''
+                        });
+                        this.currentNativeSource = finalUrl;
+                        this.currentNativeTrackId = String(track.id);
+                    } else {
+                        // Same track and same URL: avoid rebuilding MediaItem, ensure metadata is current and seek to 0
+                        console.log("[NATIVE AUDIO] Same-source replay: updating metadata and seeking to start");
+                        await NativeAudio.changeMetadata({
+                            audioId: 'main',
+                            friendlyTitle: track.title,
+                            artistName: track.artist,
+                            artworkSource: track.thumbnail || ''
+                        });
+                        await NativeAudio.seek({ audioId: 'main', timeInSeconds: 0 });
+                    }
                 }
                 
-                if (currentReqId !== this.playRequestId) return; // Stale request
+                if (currentReqId !== this.playRequestId) return false; // Stale request
 
                 console.log("[NATIVE AUDIO] play");
                 await NativeAudio.play({ audioId: 'main' });
-                this.syncUIState(true);
                 this.saveLastPlayedTrack(track);
             } else {
                 this.audio.src = finalUrl;
@@ -472,19 +527,40 @@ class AudioPlayer {
             
             // Prefetch next track to avoid gap
             this.prefetchNextTrack();
+            return true;
             
         } catch (error) {
-            console.error("[FILEBASE PLAYBACK] Error fetching presigned URL or creating player:", error);
-            window.uiManager.showNotification("Playback failed: " + error.message, "error");
+            console.error("[MPT_DIAG] Playback failed for track ID:", track?.id, error?.message || error);
+            if (track) {
+                track._prefetchedUrl = null;
+                track._prefetchedAt = null;
+            }
+            window.uiManager.showNotification("Playback failed: " + (error?.message || "Unknown error"), "error");
             this.syncUIState(false);
-            // DO NOT auto-skip to the next track here
+            if (Capacitor.isNativePlatform() && this.nativeInitialized) {
+                try {
+                    await NativeAudio.stop({ audioId: 'main' });
+                } catch(e) {}
+            }
+            return false;
+        } finally {
+            this.isTransitioning = false;
         }
     }
 
     togglePlay() {
         if (!this.currentTrack) return;
+
+        console.log("[MPT_DIAG] togglePlay clicked for track ID:", this.currentTrack.id);
         
         if (Capacitor.isNativePlatform()) {
+            if (!this.nativeInitialized || !this.currentNativeSource || this.hasPlaybackError) {
+                console.log("[MPT_DIAG] Native player uninitialized, source missing, or recovering from error; re-attempting playTrack");
+                this.hasPlaybackError = false;
+                this.playTrack(this.currentTrack, this.queue, this.queueIndex);
+                return;
+            }
+
             NativeAudio.isPlaying({ audioId: 'main' }).then(({ isPlaying }) => {
                 if (isPlaying) {
                     NativeAudio.pause({ audioId: 'main' });
@@ -493,9 +569,15 @@ class AudioPlayer {
                     NativeAudio.play({ audioId: 'main' });
                     this.syncUIState(true);
                 }
-            }).catch(e => console.error(e));
+            }).catch(e => {
+                console.error("[MPT_DIAG] togglePlay isPlaying check error:", e);
+                this.playTrack(this.currentTrack, this.queue, this.queueIndex);
+            });
         } else {
-            if (!this.audio.src) return;
+            if (!this.audio.src) {
+                this.playTrack(this.currentTrack, this.queue, this.queueIndex);
+                return;
+            }
             if (this.audio.paused) {
                 this.audio.play();
             } else {
@@ -509,22 +591,31 @@ class AudioPlayer {
         
         // Prevent duplicate events within 1 second of each other
         if (this.lastEndEventTime && now - this.lastEndEventTime < 1000) {
-            console.log("[PLAYER] Debouncing duplicate ended event");
+            console.log("[MPT_DIAG] Debouncing duplicate ended event");
             return;
         }
         this.lastEndEventTime = now;
 
         // Prevent stale events from previous track or broken tracks that end immediately
         if (this.trackLoadTime && now - this.trackLoadTime < 1000) {
-            console.log("[PLAYER] Ignoring stale/immediate end event");
+            console.log("[MPT_DIAG] Ignoring stale/immediate end event");
             return;
         }
 
-        console.log("[PLAYER] Track genuinely ended, auto-skipping to next");
+        if (this.isTransitioning) {
+            console.log("[MPT_DIAG] Transition already in progress, ignoring duplicate end event");
+            return;
+        }
+
+        console.log("[MPT_DIAG] Track genuinely ended, auto-skipping to next. Queue index:", this.queueIndex, "Queue length:", this.queue.length);
         
         if (this.queueIndex >= 0 && this.queueIndex < this.queue.length - 1) {
-            this.queueIndex++;
-            this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
+            const nextIdx = this.queueIndex + 1;
+            this.isTransitioning = true;
+            this.playTrack(this.queue[nextIdx], this.queue, nextIdx)
+                .finally(() => {
+                    this.isTransitioning = false;
+                });
         } else {
             // End of queue
             if (!Capacitor.isNativePlatform() && this.audio) {
@@ -535,59 +626,204 @@ class AudioPlayer {
         }
     }
 
+    handleNativeTrackTransition(data) {
+        console.log("[MPT_DIAG] Native track transition detected:", data);
+        if (!data || !this.queue || this.queue.length === 0) return;
+
+        const fromTrackId = data.fromTrackId ? String(data.fromTrackId) : null;
+        const transitionedId = data.trackId ? String(data.trackId) : null;
+        const transitionedSource = data.source || null;
+
+        // Stale Guard 1: Verify transition originated from the current playing track
+        if (fromTrackId && this.currentTrack && String(this.currentTrack.id) !== fromTrackId) {
+            console.warn(`[MPT_DIAG] Ignoring stale transition: fromTrackId (${fromTrackId}) does not match currentTrack (${this.currentTrack?.id})`);
+            return;
+        }
+
+        // Reconcile identity against current queue
+        let matchIndex = -1;
+        if (transitionedId) {
+            matchIndex = this.queue.findIndex(t => String(t.id) === transitionedId || t.s3Key === transitionedId);
+        }
+        if (matchIndex === -1 && transitionedSource) {
+            matchIndex = this.queue.findIndex(t => t._prefetchedUrl && t._prefetchedUrl === transitionedSource);
+        }
+
+        // Strict identity validation: Reject unexpected transitions without matching track identity
+        if (matchIndex === -1) {
+            console.warn("[MPT_DIAG] Ignoring unexpected transition event: neither trackId ('" + transitionedId + "') nor source matched current queue.");
+            return;
+        }
+
+        // Stale Guard 2: In a 1-track lookahead queue, transition must strictly advance to queueIndex + 1
+        if (matchIndex !== this.queueIndex + 1) {
+            console.warn(`[MPT_DIAG] Ignoring out-of-order transition: matchIndex (${matchIndex}) !== expected next (${this.queueIndex + 1})`);
+            return;
+        }
+
+        console.log("[MPT_DIAG] Reconciled native transition from", this.queueIndex, "to", matchIndex, "track ID:", this.queue[matchIndex].id);
+        this.queueIndex = matchIndex;
+        this.currentTrack = this.queue[this.queueIndex];
+        this.currentNativeTrackId = String(this.currentTrack.id);
+        this.currentNativeSource = this.currentTrack._prefetchedUrl || data.source || null;
+        this.trackLoadTime = Date.now();
+        this.playbackGeneration++;
+        this.updateUI();
+        this.saveLastPlayedTrack(this.currentTrack);
+
+        // Now prefetch and queue next subsequent track ahead into ExoPlayer
+        this.prefetchNextTrack();
+    }
+
     playNext() {
+        if (this.isTransitioning) {
+            console.log("[MPT_DIAG] playNext ignored: transition already in progress");
+            return;
+        }
         if (this.queueIndex >= 0 && this.queueIndex < this.queue.length - 1) {
-            this.queueIndex++;
-            this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
+            const nextIdx = this.queueIndex + 1;
+            console.log("[MPT_DIAG] playNext advancing from", this.queueIndex, "to", nextIdx);
+            this.isTransitioning = true;
+            this.playTrack(this.queue[nextIdx], this.queue, nextIdx)
+                .finally(() => {
+                    this.isTransitioning = false;
+                });
         } else {
-            console.log("[PLAYER] End of queue reached, safely doing nothing");
+            console.log("[MPT_DIAG] End of queue reached, safely doing nothing");
+        }
+    }
+
+    async prefetchSingleTrack(track) {
+        if (!track || !track.s3Key) return;
+
+        let isOfflineTrack = false;
+        if (window.OfflineManager) {
+            isOfflineTrack = (await window.OfflineManager.isDownloaded(track.s3Key)) ||
+                             (await window.OfflineManager.isDownloaded(track.id));
+            if (!isOfflineTrack && track._fromDownloads) {
+                isOfflineTrack = true;
+            }
+        }
+
+        if (isOfflineTrack) {
+            // Never reuse an existing signed HTTP(S) URL for a downloaded/Downloads-tab track
+            if (typeof track._prefetchedUrl === 'string' && (track._prefetchedUrl.startsWith('http://') || track._prefetchedUrl.startsWith('https://'))) {
+                track._prefetchedUrl = null;
+                track._prefetchedAt = null;
+            }
+
+            try {
+                const localUrls = (await window.OfflineManager.getLocalUrls(track.s3Key)) ||
+                                  (await window.OfflineManager.getLocalUrls(track.id));
+                if (localUrls && (Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl)) {
+                    track._prefetchedUrl = Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl;
+                    track._prefetchedAt = null;
+                    console.log(`[MPT_DIAG] Prepared verified local file URL for track: ${track.id}`);
+                } else {
+                    // Local file is missing or corrupt - clear stale URL so it is NEVER queued
+                    console.warn(`[MPT_DIAG] Downloaded file missing or corrupt for track: ${track.id}`);
+                    track._prefetchedUrl = null;
+                    track._prefetchedAt = null;
+                }
+            } catch (e) {
+                console.warn("[MPT_DIAG] Failed to prepare local URL for track:", track.id, e?.message);
+                track._prefetchedUrl = null;
+                track._prefetchedAt = null;
+            }
+            return; // ALWAYS exit here so an offline track never falls into the online streaming block
+        } else if (navigator.onLine) {
+            // Check if existing prefetched signed URL is still valid (< 45 minutes of 60m backend expiry)
+            if (track._prefetchedUrl && track._prefetchedAt && (Date.now() - track._prefetchedAt < 45 * 60 * 1000)) {
+                return;
+            }
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            try {
+                const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
+                const response = await fetch(requestUrl, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.url) {
+                        track._prefetchedUrl = data.url;
+                        track._prefetchedAt = Date.now();
+                        console.log(`[MPT_DIAG] Prefetched signed URL for track ID: ${track.id}`);
+                    }
+                }
+            } catch (e) {
+                clearTimeout(timeoutId);
+                console.warn("[MPT_DIAG] Failed to prefetch track ID:", track.id, e?.message);
+            }
         }
     }
 
     async prefetchNextTrack() {
         if (this.queueIndex >= 0 && this.queueIndex < this.queue.length - 1) {
             const nextTrack = this.queue[this.queueIndex + 1];
-            if (!nextTrack) return;
-            
-            let isOfflineTrack = false;
-            if (window.OfflineManager) {
-                isOfflineTrack = (nextTrack.s3Key && await window.OfflineManager.isDownloaded(nextTrack.s3Key)) ||
-                                 (await window.OfflineManager.isDownloaded(nextTrack.id));
-                if (!isOfflineTrack && nextTrack._fromDownloads) {
-                    isOfflineTrack = true;
+            const genAtStart = this.playbackGeneration;
+            const expectedCurrentId = this.currentTrack?.id ? String(this.currentTrack.id) : null;
+
+            await this.prefetchSingleTrack(nextTrack);
+
+            // Stale Guard: Ensure track or playback generation did not switch during prefetch
+            if (this.playbackGeneration !== genAtStart || !this.currentTrack || String(this.currentTrack.id) !== expectedCurrentId) {
+                console.log("[MPT_DIAG] Aborting queueNext: playback generation changed during prefetch");
+                return;
+            }
+
+            // Queue prefetched track natively into ExoPlayer playlist for seamless screen-off playback
+            const candidateUrl = nextTrack?._prefetchedUrl;
+            if (
+                Capacitor.isNativePlatform() &&
+                this.nativeInitialized &&
+                nextTrack &&
+                typeof candidateUrl === 'string' &&
+                candidateUrl.trim().length > 0
+            ) {
+                const trimmedUrl = candidateUrl.trim();
+                // Critical Offline Guard: Never queue HTTP(S) streaming URL for an offline/Downloads track
+                let isNextOffline = false;
+                if (window.OfflineManager) {
+                    isNextOffline = (await window.OfflineManager.isDownloaded(nextTrack.s3Key)) ||
+                                    (await window.OfflineManager.isDownloaded(nextTrack.id)) ||
+                                    Boolean(nextTrack._fromDownloads);
+                }
+                if (isNextOffline && (trimmedUrl.startsWith('http://') || trimmedUrl.startsWith('https://'))) {
+                    console.warn(`[MPT_DIAG] Refusing to natively queue HTTP URL for offline track: ${nextTrack.id}`);
+                    nextTrack._prefetchedUrl = null;
+                    return;
+                }
+
+                try {
+                    await NativeAudio.queueNext({
+                        audioId: 'main',
+                        source: trimmedUrl,
+                        trackId: String(nextTrack.id),
+                        expectedCurrentTrackId: expectedCurrentId,
+                        friendlyTitle: nextTrack.title || '',
+                        artistName: nextTrack.artist || '',
+                        albumTitle: nextTrack.album || '',
+                        artworkSource: nextTrack.thumbnail || ''
+                    });
+                    console.log("[MPT_DIAG] Queued next track natively in ExoPlayer for track ID:", nextTrack.id);
+                } catch (qErr) {
+                    console.warn("[MPT_DIAG] Native queueNext failed for track ID:", nextTrack.id, qErr?.message || qErr);
                 }
             }
-            
-            if (isOfflineTrack) {
-                try {
-                    const localUrls = (nextTrack.s3Key && await window.OfflineManager.getLocalUrls(nextTrack.s3Key)) ||
-                                      (await window.OfflineManager.getLocalUrls(nextTrack.id));
-                    if (localUrls) {
-                        nextTrack._prefetchedUrl = Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl;
-                        console.log(`[PREFETCH] Prepared local verified URL for next track: ${nextTrack.title}`);
-                    }
-                } catch (e) {
-                    console.error("[PREFETCH] Failed to prepare local URL for next track", e);
-                }
-            } else if (navigator.onLine && !nextTrack._prefetchedUrl) {
-                try {
-                    const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(nextTrack.s3Key)}`);
-                    const response = await fetch(requestUrl);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.url) {
-                            nextTrack._prefetchedUrl = data.url;
-                            console.log(`[PREFETCH] Prefetched URL for next track: ${nextTrack.title}`);
-                        }
-                    }
-                } catch (e) {
-                    console.error("[PREFETCH] Failed to prefetch next track", e);
-                }
+
+            // Also prefetch subsequent track ahead if queue allows
+            if (this.queueIndex + 2 < this.queue.length) {
+                const subsequentTrack = this.queue[this.queueIndex + 2];
+                this.prefetchSingleTrack(subsequentTrack).catch(() => {});
             }
         }
     }
 
     async playPrev() {
+        if (this.isTransitioning) {
+            console.log("[MPT_DIAG] playPrev ignored: transition already in progress");
+            return;
+        }
         if (Capacitor.isNativePlatform()) {
             let currentSec = 0;
             try {
@@ -600,8 +836,13 @@ class AudioPlayer {
             if (currentSec > 5) {
                 await NativeAudio.seek({ audioId: 'main', timeInSeconds: 0 });
             } else if (this.queueIndex > 0) {
-                this.queueIndex--;
-                this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
+                const prevIdx = this.queueIndex - 1;
+                console.log("[MPT_DIAG] playPrev navigating from", this.queueIndex, "to", prevIdx);
+                this.isTransitioning = true;
+                this.playTrack(this.queue[prevIdx], this.queue, prevIdx)
+                    .finally(() => {
+                        this.isTransitioning = false;
+                    });
             }
         } else {
             if (!this.audio) return;
@@ -610,17 +851,26 @@ class AudioPlayer {
                 this.audio.currentTime = 0;
                 this.audio.play();
             } else if (this.queueIndex > 0) {
-                this.queueIndex--;
-                this.playTrack(this.queue[this.queueIndex], this.queue, this.queueIndex);
+                const prevIdx = this.queueIndex - 1;
+                console.log("[MPT_DIAG] Web playPrev navigating from", this.queueIndex, "to", prevIdx);
+                this.isTransitioning = true;
+                this.playTrack(this.queue[prevIdx], this.queue, prevIdx)
+                    .finally(() => {
+                        this.isTransitioning = false;
+                    });
             }
         }
+    }
+
+    playPrevious() {
+        return this.playPrev();
     }
 
     setVolume(level) {
         if (this.audio) {
             this.audio.volume = level;
         }
-        
+
         const volumeBar = document.getElementById('volume-bar');
         if (volumeBar) volumeBar.style.width = `${level * 100}%`;
         

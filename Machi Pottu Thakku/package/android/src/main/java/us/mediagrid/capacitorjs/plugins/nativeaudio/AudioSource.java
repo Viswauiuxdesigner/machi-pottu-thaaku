@@ -19,6 +19,7 @@ public class AudioSource extends Binder {
     private static final String TAG = "AudioSource";
 
     public String id;
+    public String trackId;
     public String source;
     public AudioMetadata audioMetadata;
     public boolean useForNotification;
@@ -90,13 +91,140 @@ public class AudioSource extends Binder {
     }
 
     public void changeAudioSource(String newSource) {
+        changeAudioSource(newSource, null);
+    }
+
+    public void changeAudioSource(String newSource, String newTrackId) {
+        releaseTransitionWakeLock();
         source = newSource;
+        if (newTrackId != null && !newTrackId.isEmpty()) {
+            trackId = newTrackId;
+        } else {
+            trackId = null;
+        }
 
         Player player = getPlayer();
 
         player.setMediaItem(buildMediaItem(), true);
         player.setPlayWhenReady(false);
         player.prepare();
+    }
+
+    public void queueNext(String nextSource, AudioMetadata nextMetadata) {
+        queueNext(nextSource, nextMetadata, null, null);
+    }
+
+    public void queueNext(
+        String nextSource,
+        AudioMetadata nextMetadata,
+        String nextTrackId,
+        String expectedCurrentTrackId
+    ) {
+        Player player = getPlayer();
+        if (player == null || nextSource == null || nextSource.isEmpty()) {
+            return;
+        }
+
+        // Stale Guard: Check if player has moved away from the track this prefetch was generated for
+        if (expectedCurrentTrackId != null && !expectedCurrentTrackId.isEmpty()) {
+            MediaItem currentItem = player.getCurrentMediaItem();
+            if (currentItem != null && currentItem.mediaId != null && !currentItem.mediaId.isEmpty()) {
+                if (!currentItem.mediaId.equals(expectedCurrentTrackId)) {
+                    Log.w(
+                        TAG,
+                        "Ignoring stale queueNext: player current mediaId=" +
+                        currentItem.mediaId +
+                        " != expected=" +
+                        expectedCurrentTrackId
+                    );
+                    return;
+                }
+            }
+        }
+
+        try {
+            int currentIndex = player.getCurrentMediaItemIndex();
+            // Prune completed items before current index outside of listener callback
+            if (currentIndex > 0) {
+                player.removeMediaItems(0, currentIndex);
+            }
+
+            // Remove any previously queued item at index 1+
+            while (player.getMediaItemCount() > 1) {
+                player.removeMediaItem(1);
+            }
+
+            MediaMetadata.Builder metaBuilder = new MediaMetadata.Builder();
+            if (nextMetadata != null) {
+                metaBuilder
+                    .setTitle(nextMetadata.songTitle == null ? "" : nextMetadata.songTitle)
+                    .setArtist(nextMetadata.artistName == null ? "" : nextMetadata.artistName)
+                    .setAlbumTitle(nextMetadata.albumTitle == null ? "" : nextMetadata.albumTitle);
+
+                if (useForNotification && nextMetadata.artworkSource != null) {
+                    try {
+                        if (
+                            nextMetadata.artworkSource.startsWith("https:") ||
+                            nextMetadata.artworkSource.startsWith("http:")
+                        ) {
+                            metaBuilder.setArtworkUri(Uri.parse(nextMetadata.artworkSource));
+                        }
+                    } catch (Exception ex) {
+                        Log.w(TAG, "Could not parse artwork for queued track", ex);
+                    }
+                }
+            }
+
+            MediaItem.Builder nextBuilder = new MediaItem.Builder()
+                .setUri(nextSource)
+                .setMediaMetadata(metaBuilder.build());
+
+            if (nextTrackId != null && !nextTrackId.isEmpty()) {
+                nextBuilder.setMediaId(nextTrackId);
+            }
+
+            player.addMediaItem(nextBuilder.build());
+            Log.i(
+                TAG,
+                "Queued next track in ExoPlayer natively: id=" +
+                nextTrackId +
+                " (itemCount=" +
+                player.getMediaItemCount() +
+                ")"
+            );
+        } catch (Exception e) {
+            Log.e(TAG, "Error queuing next track in ExoPlayer", e);
+        }
+    }
+
+    public void updateCurrentMedia(MediaItem currentItem) {
+        if (currentItem != null) {
+            if (currentItem.mediaId != null && !currentItem.mediaId.isEmpty()) {
+                this.trackId = currentItem.mediaId;
+            }
+            if (
+                currentItem.localConfiguration != null &&
+                currentItem.localConfiguration.uri != null
+            ) {
+                this.source = currentItem.localConfiguration.uri.toString();
+            }
+
+            if (currentItem.mediaMetadata != null) {
+                if (currentItem.mediaMetadata.title != null) {
+                    audioMetadata.songTitle = currentItem.mediaMetadata.title.toString();
+                }
+                if (currentItem.mediaMetadata.artist != null) {
+                    audioMetadata.artistName = currentItem.mediaMetadata.artist.toString();
+                }
+                if (currentItem.mediaMetadata.albumTitle != null) {
+                    audioMetadata.albumTitle = currentItem.mediaMetadata.albumTitle.toString();
+                }
+            }
+        }
+
+        if (useForNotification) {
+            audioMetadata.startUpdater();
+        }
     }
 
     public void changeMetadata(AudioMetadata metadata) {
@@ -119,12 +247,13 @@ public class AudioSource extends Binder {
     }
 
     public void play() {
-        releaseTransitionWakeLock();
-        setIsPlaying();
-
         Player player = getPlayer();
 
         if (player.getPlaybackState() == Player.STATE_IDLE) {
+            player.prepare();
+        } else if (player.getPlaybackState() == Player.STATE_ENDED) {
+            Log.i(TAG, "Player is in STATE_ENDED, seeking to default position and preparing");
+            player.seekToDefaultPosition();
             player.prepare();
         }
 
@@ -136,6 +265,7 @@ public class AudioSource extends Binder {
     }
 
     public void pause() {
+        releaseTransitionWakeLock();
         setIsPaused();
         getPlayer().pause();
         audioMetadata.stopUpdater();
@@ -235,7 +365,13 @@ public class AudioSource extends Binder {
     }
 
     public MediaItem buildMediaItem() {
-        return new MediaItem.Builder().setMediaMetadata(getMediaMetadata()).setUri(source).build();
+        MediaItem.Builder builder = new MediaItem.Builder()
+            .setMediaMetadata(getMediaMetadata())
+            .setUri(source);
+        if (trackId != null && !trackId.isEmpty()) {
+            builder.setMediaId(trackId);
+        }
+        return builder.build();
     }
 
     public void destroy() {
