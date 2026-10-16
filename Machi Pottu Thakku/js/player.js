@@ -29,6 +29,7 @@ class AudioPlayer {
         this.isTransitioning = false;
         this.duration = 0;
         this.playbackGeneration = 0;
+        this.queuedTrackIds = new Set();
 
         this.setupListeners();
         this.setupAudioEvents();
@@ -298,6 +299,112 @@ class AudioPlayer {
         if (window.lucide) lucide.createIcons();
     }
 
+    async resolveTrackPlayableUrl(track) {
+        if (!track) return null;
+
+        if (!track.s3Key && track.id) {
+            let canonical = null;
+            if (window.app?.musicLibrary && window.app.musicLibrary.length > 0) {
+                canonical = window.app.musicLibrary.find(t => String(t.id) === String(track.id));
+            }
+            if (!canonical && window.OfflineManager && typeof window.OfflineManager.getLocalTrack === 'function') {
+                canonical = window.OfflineManager.getLocalTrack(track.id);
+            }
+            if (canonical && canonical.s3Key) {
+                track.s3Key = canonical.s3Key;
+            }
+        }
+
+        let isOfflineTrack = false;
+        if (window.OfflineManager) {
+            isOfflineTrack = (track.s3Key && await window.OfflineManager.isDownloaded(track.s3Key)) ||
+                             (await window.OfflineManager.isDownloaded(track.id));
+            if (!isOfflineTrack && track._fromDownloads) {
+                isOfflineTrack = true;
+            }
+        }
+
+        if (isOfflineTrack) {
+            if (typeof track._prefetchedUrl === 'string' && (track._prefetchedUrl.startsWith('http://') || track._prefetchedUrl.startsWith('https://'))) {
+                track._prefetchedUrl = null;
+                track._prefetchedAt = null;
+            }
+
+            try {
+                const localUrls = (track.s3Key && await window.OfflineManager.getLocalUrls(track.s3Key)) ||
+                                  (await window.OfflineManager.getLocalUrls(track.id));
+                if (localUrls && (Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl)) {
+                    track._prefetchedUrl = Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl;
+                    track._prefetchedAt = null;
+                    return track._prefetchedUrl;
+                } else {
+                    track._prefetchedUrl = null;
+                    track._prefetchedAt = null;
+                    return null;
+                }
+            } catch (e) {
+                track._prefetchedUrl = null;
+                track._prefetchedAt = null;
+                return null;
+            }
+        } else {
+            const isUrlExpired = track._prefetchedAt && (Date.now() - track._prefetchedAt > 45 * 60 * 1000);
+            if (track._prefetchedUrl && !isUrlExpired && typeof track._prefetchedUrl === 'string' && track._prefetchedUrl.trim().length > 0) {
+                return track._prefetchedUrl;
+            }
+            if (!navigator.onLine || !track.s3Key) {
+                return null;
+            }
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            try {
+                const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
+                const response = await fetch(requestUrl, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.url) {
+                        track._prefetchedUrl = data.url;
+                        track._prefetchedAt = Date.now();
+                        return data.url;
+                    }
+                }
+            } catch (e) {
+                clearTimeout(timeoutId);
+            }
+            return null;
+        }
+    }
+
+    buildNativeQueueItem(track, url, isOffline = false) {
+        let offline = Boolean(isOffline || track._fromDownloads || track.isOffline);
+        if (!offline && window.OfflineManager && typeof window.OfflineManager.findTrackEntry === 'function') {
+            const entry = window.OfflineManager.findTrackEntry(track.s3Key || track.id);
+            if (entry && entry.localPath) {
+                offline = true;
+            }
+        }
+        if (!offline && url) {
+            const lower = String(url).toLowerCase();
+            if (lower.startsWith('file:') || lower.startsWith('content:')) {
+                offline = true;
+            }
+        }
+
+        return {
+            source: url || '',
+            trackId: String(track.id),
+            friendlyTitle: track.title || '',
+            artistName: track.artist || '',
+            albumTitle: track.album || '',
+            artworkSource: track.thumbnail || '',
+            s3Key: track.s3Key || '',
+            urlFetchedAt: track._prefetchedAt || 0,
+            isOffline: offline
+        };
+    }
+
     async playTrack(track, queueList = [], index = 0) {
         if (!track?.s3Key && track?.id) {
             let canonical = null;
@@ -356,86 +463,75 @@ class AudioPlayer {
         this.updateUI();
         
         try {
-            // Determine if track is intended for offline local playback
-            let isOfflineTrack = false;
-            let localUrls = null;
-
-            if (window.OfflineManager) {
-                const isVerified = (track.s3Key && await window.OfflineManager.isDownloaded(track.s3Key)) ||
-                                   (await window.OfflineManager.isDownloaded(track.id));
-
-                if (isVerified) {
-                    isOfflineTrack = true;
-                } else if (track._fromDownloads) {
-                    // Explicitly selected from Downloads view, but local file is missing/corrupt
-                    isOfflineTrack = true;
-                }
-            }
-
-            let finalUrl = null;
-
-            if (isOfflineTrack) {
-                console.log("[PLAYBACK] Resolving local downloaded track:", track.title);
-                localUrls = (track.s3Key && await window.OfflineManager.getLocalUrls(track.s3Key)) ||
-                            (await window.OfflineManager.getLocalUrls(track.id));
-
-                if (localUrls && (Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl)) {
-                    finalUrl = Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl;
-                    console.log("[PLAYBACK] Playing local verified audio:", finalUrl);
-                } else {
-                    // Critical Requirement 2: Do NOT silently fall back to online playback if local file is missing from Downloads
-                    console.error("[PLAYBACK] Downloaded audio file is missing or corrupt for track:", track.id);
+            const finalUrl = await this.resolveTrackPlayableUrl(track);
+            if (!finalUrl) {
+                const isOfflineTrack = Boolean(track._fromDownloads || track.isOffline ||
+                    (window.OfflineManager?.findTrackEntry && window.OfflineManager.findTrackEntry(track.s3Key || track.id)));
+                if (isOfflineTrack) {
                     window.uiManager.showNotification("Downloaded audio file is missing or corrupted.", "error");
-                    this.syncUIState(false);
-                    return false;
-                }
-            } else {
-                // Online streaming path: validate cached signed URL freshness (< 45 minutes)
-                const isUrlExpired = track._prefetchedAt && (Date.now() - track._prefetchedAt > 45 * 60 * 1000);
-                if (track._prefetchedUrl && !isUrlExpired) {
-                    console.log("[MPT_DIAG] Using prefetched signed URL for track ID:", track.id);
-                    finalUrl = track._prefetchedUrl;
-                    track._prefetchedUrl = null;
-                    track._prefetchedAt = null;
+                } else if (!navigator.onLine) {
+                    window.uiManager.showNotification("Cannot play this song while offline. Download it first to listen offline.", "warning");
                 } else {
-                    if (isUrlExpired) {
-                        console.log("[MPT_DIAG] Prefetched URL expired (>45m), refreshing for track ID:", track.id);
-                        track._prefetchedUrl = null;
-                        track._prefetchedAt = null;
-                    }
-                    if (!navigator.onLine) {
-                        console.warn("[PLAYBACK] Offline and track is not downloaded");
-                        window.uiManager.showNotification("Cannot play this song while offline. Download it first to listen offline.", "warning");
-                        this.syncUIState(false);
-                        return false;
-                    }
-
-                    console.log("[MPT_DIAG] Requesting signed URL for track ID:", track.id);
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 8000);
-                    try {
-                        const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
-                        const response = await fetch(requestUrl, { signal: controller.signal });
-                        clearTimeout(timeoutId);
-                        if (!response.ok) {
-                            throw new Error("Failed to generate signed URL (HTTP " + response.status + ")");
-                        }
-                        const data = await response.json();
-                        if (data.error) throw new Error(data.error);
-                        if (!data.url) throw new Error("No URL returned from server.");
-
-                        console.log("[MPT_DIAG] Signed URL generated successfully for track ID:", track.id);
-                        finalUrl = data.url;
-                    } catch (fetchErr) {
-                        clearTimeout(timeoutId);
-                        throw fetchErr;
-                    }
+                    window.uiManager.showNotification("Failed to resolve audio for playback.", "error");
                 }
+                this.syncUIState(false);
+                return false;
             }
             
             if (currentReqId !== this.playRequestId) return false; // Stale request
             
             if (Capacitor.isNativePlatform()) {
+                // Concurrently resolve upcoming lookahead window, plus ALL downloaded/offline tracks across the entire queue
+                const tracksToPreResolve = [];
+                const seenToResolve = new Set();
+
+                // 1. Upcoming window (up to 4 upcoming tracks for immediate lookahead)
+                for (let i = this.queueIndex + 1; i < Math.min(this.queue.length, this.queueIndex + 5); i++) {
+                    const qTrack = this.queue[i];
+                    if (qTrack && !seenToResolve.has(String(qTrack.id))) {
+                        seenToResolve.add(String(qTrack.id));
+                        tracksToPreResolve.push(qTrack);
+                    }
+                }
+
+                // 2. All downloaded/offline tracks anywhere in the queue so screen-off playback can play all offline tracks
+                for (let i = 0; i < this.queue.length; i++) {
+                    const qTrack = this.queue[i];
+                    if (qTrack && !seenToResolve.has(String(qTrack.id)) && !qTrack._prefetchedUrl) {
+                        const isOffline = Boolean(
+                            qTrack._fromDownloads ||
+                            qTrack.isOffline ||
+                            (window.OfflineManager?.findTrackEntry && window.OfflineManager.findTrackEntry(qTrack.s3Key || qTrack.id))
+                        );
+                        if (isOffline) {
+                            seenToResolve.add(String(qTrack.id));
+                            tracksToPreResolve.push(qTrack);
+                        }
+                    }
+                }
+
+                if (tracksToPreResolve.length > 0) {
+                    await Promise.allSettled(tracksToPreResolve.map(t => this.resolveTrackPlayableUrl(t)));
+                }
+
+                if (currentReqId !== this.playRequestId) return false; // Stale request
+
+                // Build native items for the ENTIRE queue so native ExoPlayer can autonomously replenish screen-off
+                const nativeItems = [];
+                this.queuedTrackIds = new Set();
+
+                for (let i = 0; i < this.queue.length; i++) {
+                    const qTrack = this.queue[i];
+                    let playableUrl = qTrack._prefetchedUrl || '';
+                    if (i === this.queueIndex) {
+                        playableUrl = finalUrl;
+                    }
+                    nativeItems.push(this.buildNativeQueueItem(qTrack, playableUrl));
+                    if (playableUrl) {
+                        this.queuedTrackIds.add(String(qTrack.id));
+                    }
+                }
+
                 if (!this.nativeInitialized) {
                     console.log("[NATIVE AUDIO] create player");
                     const res = await NativeAudio.create({
@@ -481,52 +577,32 @@ class AudioPlayer {
                     
                     console.log("[NATIVE AUDIO] initialize player");
                     await NativeAudio.initialize({ audioId: 'main' });
-                } else {
-                    const sourceChanged = this.currentNativeSource !== finalUrl;
-                    const trackChanged = this.currentNativeTrackId !== String(track.id);
-
-                    if (sourceChanged || trackChanged) {
-                        console.log(`[NATIVE AUDIO] changeAudioSource: sourceChanged=${sourceChanged}, trackChanged=${trackChanged}`);
-                        await NativeAudio.changeAudioSource({
-                            audioId: 'main',
-                            source: finalUrl,
-                            trackId: String(track.id)
-                        });
-                        console.log("[NATIVE AUDIO] changeMetadata");
-                        await NativeAudio.changeMetadata({
-                            audioId: 'main',
-                            friendlyTitle: track.title,
-                            artistName: track.artist,
-                            artworkSource: track.thumbnail || ''
-                        });
-                        this.currentNativeSource = finalUrl;
-                        this.currentNativeTrackId = String(track.id);
-                    } else {
-                        // Same track and same URL: avoid rebuilding MediaItem, ensure metadata is current and seek to 0
-                        console.log("[NATIVE AUDIO] Same-source replay: updating metadata and seeking to start");
-                        await NativeAudio.changeMetadata({
-                            audioId: 'main',
-                            friendlyTitle: track.title,
-                            artistName: track.artist,
-                            artworkSource: track.thumbnail || ''
-                        });
-                        await NativeAudio.seek({ audioId: 'main', timeInSeconds: 0 });
-                    }
                 }
-                
+
+                console.log("[NATIVE AUDIO] setQueue with", nativeItems.length, "items, startIndex:", this.queueIndex);
+                await NativeAudio.setQueue({
+                    audioId: 'main',
+                    items: nativeItems,
+                    startIndex: this.queueIndex,
+                    endpoint: typeof window.getApiUrl === 'function' ? window.getApiUrl('/.netlify/functions/music-play') : 'https://starlit-sable-83184f.netlify.app/.netlify/functions/music-play'
+                });
+
                 if (currentReqId !== this.playRequestId) return false; // Stale request
 
                 console.log("[NATIVE AUDIO] play");
                 await NativeAudio.play({ audioId: 'main' });
+                this.currentNativeSource = finalUrl;
+                this.currentNativeTrackId = String(track.id);
                 this.saveLastPlayedTrack(track);
+
+                // Maintain next tracks in native queue
+                this.maintainNativeQueue();
             } else {
                 this.audio.src = finalUrl;
                 await this.audio.play();
                 this.saveLastPlayedTrack(track);
             }
             
-            // Prefetch next track to avoid gap
-            this.prefetchNextTrack();
             return true;
             
         } catch (error) {
@@ -630,34 +706,20 @@ class AudioPlayer {
         console.log("[MPT_DIAG] Native track transition detected:", data);
         if (!data || !this.queue || this.queue.length === 0) return;
 
-        const fromTrackId = data.fromTrackId ? String(data.fromTrackId) : null;
         const transitionedId = data.trackId ? String(data.trackId) : null;
         const transitionedSource = data.source || null;
-
-        // Stale Guard 1: Verify transition originated from the current playing track
-        if (fromTrackId && this.currentTrack && String(this.currentTrack.id) !== fromTrackId) {
-            console.warn(`[MPT_DIAG] Ignoring stale transition: fromTrackId (${fromTrackId}) does not match currentTrack (${this.currentTrack?.id})`);
-            return;
-        }
 
         // Reconcile identity against current queue
         let matchIndex = -1;
         if (transitionedId) {
-            matchIndex = this.queue.findIndex(t => String(t.id) === transitionedId || t.s3Key === transitionedId);
+            matchIndex = this.queue.findIndex(t => String(t.id) === transitionedId || (t.s3Key && t.s3Key === transitionedId));
         }
         if (matchIndex === -1 && transitionedSource) {
-            matchIndex = this.queue.findIndex(t => t._prefetchedUrl && t._prefetchedUrl === transitionedSource);
+            matchIndex = this.queue.findIndex(t => (t._prefetchedUrl && t._prefetchedUrl === transitionedSource) || t.localPath === transitionedSource);
         }
 
-        // Strict identity validation: Reject unexpected transitions without matching track identity
         if (matchIndex === -1) {
-            console.warn("[MPT_DIAG] Ignoring unexpected transition event: neither trackId ('" + transitionedId + "') nor source matched current queue.");
-            return;
-        }
-
-        // Stale Guard 2: In a 1-track lookahead queue, transition must strictly advance to queueIndex + 1
-        if (matchIndex !== this.queueIndex + 1) {
-            console.warn(`[MPT_DIAG] Ignoring out-of-order transition: matchIndex (${matchIndex}) !== expected next (${this.queueIndex + 1})`);
+            console.warn("[MPT_DIAG] Ignoring unexpected transition event: could not identify track in queue:", transitionedId);
             return;
         }
 
@@ -671,8 +733,8 @@ class AudioPlayer {
         this.updateUI();
         this.saveLastPlayedTrack(this.currentTrack);
 
-        // Now prefetch and queue next subsequent track ahead into ExoPlayer
-        this.prefetchNextTrack();
+        // Replenish native queue lookahead window
+        this.maintainNativeQueue();
     }
 
     playNext() {
@@ -693,130 +755,51 @@ class AudioPlayer {
         }
     }
 
-    async prefetchSingleTrack(track) {
-        if (!track || !track.s3Key) return;
+    async maintainNativeQueue() {
+        if (!Capacitor.isNativePlatform() || !this.nativeInitialized) return;
+        const currentGen = this.playbackGeneration;
+        const lookaheadCount = 5;
+        const tracksToResolve = [];
 
-        let isOfflineTrack = false;
-        if (window.OfflineManager) {
-            isOfflineTrack = (await window.OfflineManager.isDownloaded(track.s3Key)) ||
-                             (await window.OfflineManager.isDownloaded(track.id));
-            if (!isOfflineTrack && track._fromDownloads) {
-                isOfflineTrack = true;
+        for (let i = this.queueIndex + 1; i < Math.min(this.queue.length, this.queueIndex + 1 + lookaheadCount); i++) {
+            const t = this.queue[i];
+            if (t && (!this.queuedTrackIds || !this.queuedTrackIds.has(String(t.id)))) {
+                tracksToResolve.push(t);
             }
         }
 
-        if (isOfflineTrack) {
-            // Never reuse an existing signed HTTP(S) URL for a downloaded/Downloads-tab track
-            if (typeof track._prefetchedUrl === 'string' && (track._prefetchedUrl.startsWith('http://') || track._prefetchedUrl.startsWith('https://'))) {
-                track._prefetchedUrl = null;
-                track._prefetchedAt = null;
-            }
+        if (tracksToResolve.length === 0) return;
 
-            try {
-                const localUrls = (await window.OfflineManager.getLocalUrls(track.s3Key)) ||
-                                  (await window.OfflineManager.getLocalUrls(track.id));
-                if (localUrls && (Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl)) {
-                    track._prefetchedUrl = Capacitor.isNativePlatform() ? localUrls.nativeUrl : localUrls.webViewUrl;
-                    track._prefetchedAt = null;
-                    console.log(`[MPT_DIAG] Prepared verified local file URL for track: ${track.id}`);
-                } else {
-                    // Local file is missing or corrupt - clear stale URL so it is NEVER queued
-                    console.warn(`[MPT_DIAG] Downloaded file missing or corrupt for track: ${track.id}`);
-                    track._prefetchedUrl = null;
-                    track._prefetchedAt = null;
+        await Promise.allSettled(tracksToResolve.map(t => this.resolveTrackPlayableUrl(t)));
+
+        if (this.playbackGeneration !== currentGen) return; // Stale
+
+        const newItems = [];
+        for (const t of tracksToResolve) {
+            if (t._prefetchedUrl) {
+                newItems.push(this.buildNativeQueueItem(t, t._prefetchedUrl));
+                if (this.queuedTrackIds) {
+                    this.queuedTrackIds.add(String(t.id));
                 }
-            } catch (e) {
-                console.warn("[MPT_DIAG] Failed to prepare local URL for track:", track.id, e?.message);
-                track._prefetchedUrl = null;
-                track._prefetchedAt = null;
             }
-            return; // ALWAYS exit here so an offline track never falls into the online streaming block
-        } else if (navigator.onLine) {
-            // Check if existing prefetched signed URL is still valid (< 45 minutes of 60m backend expiry)
-            if (track._prefetchedUrl && track._prefetchedAt && (Date.now() - track._prefetchedAt < 45 * 60 * 1000)) {
-                return;
-            }
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000);
+        }
+
+        if (newItems.length > 0) {
             try {
-                const requestUrl = window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`);
-                const response = await fetch(requestUrl, { signal: controller.signal });
-                clearTimeout(timeoutId);
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data && data.url) {
-                        track._prefetchedUrl = data.url;
-                        track._prefetchedAt = Date.now();
-                        console.log(`[MPT_DIAG] Prefetched signed URL for track ID: ${track.id}`);
-                    }
-                }
+                await NativeAudio.addQueueItems({ audioId: 'main', items: newItems });
+                console.log("[MPT_DIAG] Appended", newItems.length, "items to native ExoPlayer queue");
             } catch (e) {
-                clearTimeout(timeoutId);
-                console.warn("[MPT_DIAG] Failed to prefetch track ID:", track.id, e?.message);
+                console.warn("[MPT_DIAG] addQueueItems failed", e);
             }
         }
     }
 
+    async prefetchSingleTrack(track) {
+        return this.resolveTrackPlayableUrl(track);
+    }
+
     async prefetchNextTrack() {
-        if (this.queueIndex >= 0 && this.queueIndex < this.queue.length - 1) {
-            const nextTrack = this.queue[this.queueIndex + 1];
-            const genAtStart = this.playbackGeneration;
-            const expectedCurrentId = this.currentTrack?.id ? String(this.currentTrack.id) : null;
-
-            await this.prefetchSingleTrack(nextTrack);
-
-            // Stale Guard: Ensure track or playback generation did not switch during prefetch
-            if (this.playbackGeneration !== genAtStart || !this.currentTrack || String(this.currentTrack.id) !== expectedCurrentId) {
-                console.log("[MPT_DIAG] Aborting queueNext: playback generation changed during prefetch");
-                return;
-            }
-
-            // Queue prefetched track natively into ExoPlayer playlist for seamless screen-off playback
-            const candidateUrl = nextTrack?._prefetchedUrl;
-            if (
-                Capacitor.isNativePlatform() &&
-                this.nativeInitialized &&
-                nextTrack &&
-                typeof candidateUrl === 'string' &&
-                candidateUrl.trim().length > 0
-            ) {
-                const trimmedUrl = candidateUrl.trim();
-                // Critical Offline Guard: Never queue HTTP(S) streaming URL for an offline/Downloads track
-                let isNextOffline = false;
-                if (window.OfflineManager) {
-                    isNextOffline = (await window.OfflineManager.isDownloaded(nextTrack.s3Key)) ||
-                                    (await window.OfflineManager.isDownloaded(nextTrack.id)) ||
-                                    Boolean(nextTrack._fromDownloads);
-                }
-                if (isNextOffline && (trimmedUrl.startsWith('http://') || trimmedUrl.startsWith('https://'))) {
-                    console.warn(`[MPT_DIAG] Refusing to natively queue HTTP URL for offline track: ${nextTrack.id}`);
-                    nextTrack._prefetchedUrl = null;
-                    return;
-                }
-
-                try {
-                    await NativeAudio.queueNext({
-                        audioId: 'main',
-                        source: trimmedUrl,
-                        trackId: String(nextTrack.id),
-                        expectedCurrentTrackId: expectedCurrentId,
-                        friendlyTitle: nextTrack.title || '',
-                        artistName: nextTrack.artist || '',
-                        albumTitle: nextTrack.album || '',
-                        artworkSource: nextTrack.thumbnail || ''
-                    });
-                    console.log("[MPT_DIAG] Queued next track natively in ExoPlayer for track ID:", nextTrack.id);
-                } catch (qErr) {
-                    console.warn("[MPT_DIAG] Native queueNext failed for track ID:", nextTrack.id, qErr?.message || qErr);
-                }
-            }
-
-            // Also prefetch subsequent track ahead if queue allows
-            if (this.queueIndex + 2 < this.queue.length) {
-                const subsequentTrack = this.queue[this.queueIndex + 2];
-                this.prefetchSingleTrack(subsequentTrack).catch(() => {});
-            }
-        }
+        return this.maintainNativeQueue();
     }
 
     async playPrev() {

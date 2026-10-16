@@ -39,7 +39,7 @@ public class AudioPlayerService extends MediaSessionService {
             .setAudioAttributes(
                 new AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                     .build(),
                 true
             )
@@ -105,11 +105,14 @@ public class AudioPlayerService extends MediaSessionService {
                     super.seekToNextMediaItem();
                     return;
                 }
-                Log.i(TAG, "Native next: no queued item in native playlist, forwarding to JS");
+                Log.i(TAG, "Native next: at edge of buffered playlist, checking master in AudioSource");
                 AudioSources audioSources = getAudioSourcesFromMediaSession();
                 if (audioSources != null) {
                     AudioSource source = audioSources.forNotification();
                     if (source != null) {
+                        if (source.advanceNextInMaster(this)) {
+                            return;
+                        }
                         source.emitNext();
                     }
                 }
@@ -119,6 +122,11 @@ public class AudioPlayerService extends MediaSessionService {
                 if (getCurrentPosition() > 3000) {
                     Log.i(TAG, "Native previous: seeking to start of current track (pos > 3s)");
                     super.seekTo(0);
+                    return;
+                }
+                if (getCurrentMediaItemIndex() > 0) {
+                    Log.i(TAG, "Native previous: moving to previous media item directly in ExoPlayer");
+                    super.seekToPreviousMediaItem();
                     return;
                 }
                 Log.i(TAG, "Native previous: position <= 3s, forwarding to JS with WakeLock");

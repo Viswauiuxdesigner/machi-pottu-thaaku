@@ -242,6 +242,92 @@ public class AudioPlayerPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setQueue(PluginCall call) {
+        try {
+            if (!audioSourceExists("setQueue", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            com.getcapacitor.JSArray itemsArray = call.getArray("items");
+            int startIndex = call.getInt("startIndex", 0);
+            String endpoint = call.getString("endpoint");
+
+            if (itemsArray == null || itemsArray.length() == 0) {
+                call.reject("items array is required and must not be empty");
+                return;
+            }
+
+            java.util.List<AudioSource.QueueItem> queueItems = new java.util.ArrayList<>();
+            for (int i = 0; i < itemsArray.length(); i++) {
+                com.getcapacitor.JSObject itemObj = itemsArray.getJSONObject(i);
+                if (itemObj != null) {
+                    queueItems.add(new AudioSource.QueueItem(
+                        itemObj.getString("source"),
+                        itemObj.getString("trackId"),
+                        itemObj.getString("friendlyTitle"),
+                        itemObj.getString("artistName"),
+                        itemObj.getString("albumTitle"),
+                        itemObj.getString("artworkSource"),
+                        itemObj.getString("s3Key"),
+                        itemObj.optLong("urlFetchedAt", 0L),
+                        itemObj.optBoolean("isOffline", false)
+                    ));
+                }
+            }
+
+            postToLooper("setQueue", call, () -> {
+                audioSource.setQueue(queueItems, startIndex, endpoint);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting the queue.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void addQueueItems(PluginCall call) {
+        try {
+            if (!audioSourceExists("addQueueItems", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            com.getcapacitor.JSArray itemsArray = call.getArray("items");
+
+            if (itemsArray == null || itemsArray.length() == 0) {
+                call.resolve();
+                return;
+            }
+
+            java.util.List<AudioSource.QueueItem> queueItems = new java.util.ArrayList<>();
+            for (int i = 0; i < itemsArray.length(); i++) {
+                com.getcapacitor.JSObject itemObj = itemsArray.getJSONObject(i);
+                if (itemObj != null) {
+                    queueItems.add(new AudioSource.QueueItem(
+                        itemObj.getString("source"),
+                        itemObj.getString("trackId"),
+                        itemObj.getString("friendlyTitle"),
+                        itemObj.getString("artistName"),
+                        itemObj.getString("albumTitle"),
+                        itemObj.getString("artworkSource"),
+                        itemObj.getString("s3Key"),
+                        itemObj.optLong("urlFetchedAt", 0L),
+                        itemObj.optBoolean("isOffline", false)
+                    ));
+                }
+            }
+
+            postToLooper("addQueueItems", call, () -> {
+                audioSource.addQueueItems(queueItems);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue adding queue items.", ex);
+        }
+    }
+
+    @PluginMethod
     public void queueNext(PluginCall call) {
         try {
             if (!audioSourceExists("queueNext", call)) {
@@ -252,6 +338,7 @@ public class AudioPlayerPlugin extends Plugin {
             String nextSource = call.getString("source");
             String nextTrackId = call.getString("trackId");
             String expectedCurrentTrackId = call.getString("expectedCurrentTrackId");
+            boolean isOffline = call.getBoolean("isOffline", false);
             AudioMetadata nextMetadata = new AudioMetadata(
                 call.getString("albumTitle"),
                 call.getString("artistName"),
@@ -262,7 +349,7 @@ public class AudioPlayerPlugin extends Plugin {
             );
 
             postToLooper("queueNext", call, () -> {
-                audioSource.queueNext(nextSource, nextMetadata, nextTrackId, expectedCurrentTrackId);
+                audioSource.queueNext(nextSource, nextMetadata, nextTrackId, expectedCurrentTrackId, isOffline);
                 call.resolve();
             });
         } catch (Exception ex) {
@@ -278,6 +365,7 @@ public class AudioPlayerPlugin extends Plugin {
             }
 
             AudioSource audioSource = audioSources.get(audioId(call));
+
 
             postToLooper("changeMetadata", call, () -> {
                 audioSource.changeMetadata(
