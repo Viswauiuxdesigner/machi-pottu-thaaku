@@ -151,7 +151,7 @@ public class PlayerEventListener implements Listener {
             JSObject errObj = new JSObject();
             errObj.put("status", "error");
             errObj.put("errorMessage", error != null ? error.getMessage() : "Playback error");
-            plugin.notifyListeners("playbackStatusChange", errObj);
+            plugin.emitPlaybackStatusChangeEvent(errObj);
         }
     }
 

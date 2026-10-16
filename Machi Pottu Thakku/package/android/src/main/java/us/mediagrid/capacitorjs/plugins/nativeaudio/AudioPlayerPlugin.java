@@ -18,6 +18,8 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import org.json.JSONException;
+import org.json.JSONObject;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import java.util.HashMap;
@@ -260,7 +262,8 @@ public class AudioPlayerPlugin extends Plugin {
 
             java.util.List<AudioSource.QueueItem> queueItems = new java.util.ArrayList<>();
             for (int i = 0; i < itemsArray.length(); i++) {
-                com.getcapacitor.JSObject itemObj = itemsArray.getJSONObject(i);
+                JSONObject rawObj = itemsArray.getJSONObject(i);
+                JSObject itemObj = toJSObject(rawObj);
                 if (itemObj != null) {
                     queueItems.add(new AudioSource.QueueItem(
                         itemObj.getString("source"),
@@ -302,7 +305,8 @@ public class AudioPlayerPlugin extends Plugin {
 
             java.util.List<AudioSource.QueueItem> queueItems = new java.util.ArrayList<>();
             for (int i = 0; i < itemsArray.length(); i++) {
-                com.getcapacitor.JSObject itemObj = itemsArray.getJSONObject(i);
+                JSONObject rawObj = itemsArray.getJSONObject(i);
+                JSObject itemObj = toJSObject(rawObj);
                 if (itemObj != null) {
                     queueItems.add(new AudioSource.QueueItem(
                         itemObj.getString("source"),
@@ -847,5 +851,19 @@ public class AudioPlayerPlugin extends Plugin {
 
     public void emitTrackTransitionEvent(JSObject data) {
         notifyListeners("nativeTrackTransition", data != null ? data : new JSObject());
+    }
+
+    public void emitPlaybackStatusChangeEvent(JSObject data) {
+        notifyListeners("playbackStatusChange", data != null ? data : new JSObject());
+    }
+
+    private JSObject toJSObject(JSONObject obj) throws JSONException {
+        if (obj == null) {
+            return null;
+        }
+        if (obj instanceof JSObject) {
+            return (JSObject) obj;
+        }
+        return new JSObject(obj.toString());
     }
 }
