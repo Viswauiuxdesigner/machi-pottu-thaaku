@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="/css/styles.css">
 
     <!-- Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="/js/vendor/lucide.min.js"></script>
 </head>
 
 <body>
@@ -235,7 +235,14 @@
                     <i data-lucide="chevron-down" style="color: var(--accent-color);"></i>
                 </button>
                 <div class="np-header-title" style="color: var(--accent-color); font-weight: 600;">Now Playing</div>
-                <div style="width: 44px;"></div> <!-- placeholder for balance -->
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <button class="icon-btn" id="np-btn-eq" title="Equalizer" aria-label="Equalizer">
+                        <i data-lucide="sliders" style="width: 22px; height: 22px; color: var(--secondary-text);"></i>
+                    </button>
+                    <button class="icon-btn" id="np-btn-queue" title="Up Next" aria-label="Up Next">
+                        <i data-lucide="list-music" style="width: 22px; height: 22px; color: var(--secondary-text);"></i>
+                    </button>
+                </div>
             </div>
             
             <div class="np-artwork-container">
@@ -243,7 +250,7 @@
                     <i data-lucide="music" style="width: 64px; height: 64px;"></i>
                 </div>
             </div>
-            
+
             <div class="np-info-row">
                 <div class="np-meta">
                     <div id="np-title" class="np-title">No track playing</div>
@@ -270,6 +277,129 @@
                     <i data-lucide="play" style="width: 40px; height: 40px; fill: white; margin-left: 4px;"></i>
                 </button>
                 <button class="control-btn" id="np-next"><i data-lucide="skip-forward" style="width: 32px; height: 32px; fill: white; stroke: white;"></i></button>
+            </div>
+
+            <div class="np-secondary-actions" style="display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding: var(--spacing-2) var(--spacing-4);">
+                <button class="icon-btn" id="np-repeat-btn" title="Repeat Mode" aria-label="Repeat Mode">
+                    <i data-lucide="repeat" id="np-repeat-icon" style="width: 24px; height: 24px;"></i>
+                </button>
+                <div id="np-repeat-badge" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--secondary-text); font-weight: 600;">Repeat Off</div>
+                <button class="icon-btn" id="np-up-next-btn" title="Up Next Queue" aria-label="Up Next Queue">
+                    <i data-lucide="list-music" style="width: 24px; height: 24px;"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Up Next Drawer -->
+        <div id="drawer-up-next" class="bottom-drawer" aria-hidden="true">
+            <div class="drawer-backdrop" onclick="window.player.closeUpNextDrawer()"></div>
+            <div class="drawer-content">
+                <div class="drawer-header">
+                    <div class="drawer-title-group">
+                        <div class="drawer-title"><i data-lucide="list-music" style="width: 20px; height: 20px; margin-right: 8px; color: var(--accent-color);"></i> Up Next</div>
+                        <div class="drawer-subtitle" id="up-next-count">0 songs in queue</div>
+                    </div>
+                    <button class="icon-btn" onclick="window.player.closeUpNextDrawer()" aria-label="Close Up Next">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+
+                <div class="drawer-body">
+                    <div class="queue-section-label">NOW PLAYING</div>
+                    <div id="up-next-current" class="up-next-current-track">
+                        <!-- Populated by JS -->
+                    </div>
+
+                    <div class="queue-section-label" style="margin-top: var(--spacing-3);">UPCOMING</div>
+                    <div id="up-next-list" class="up-next-list">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Equalizer Drawer -->
+        <div id="drawer-eq" class="bottom-drawer" aria-hidden="true">
+            <div class="drawer-backdrop" onclick="window.player.closeEqDrawer()"></div>
+            <div class="drawer-content">
+                <div class="drawer-header">
+                    <div class="drawer-title-group">
+                        <div class="drawer-title"><i data-lucide="sliders" style="width: 20px; height: 20px; margin-right: 8px; color: var(--accent-color);"></i> Equalizer</div>
+                        <div class="drawer-subtitle" id="eq-status-label">Native DSP Audio Effects</div>
+                    </div>
+                    <button class="icon-btn" onclick="window.player.closeEqDrawer()" aria-label="Close Equalizer">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+
+                <div class="drawer-body">
+                    <!-- Presets -->
+                    <div class="eq-presets-row">
+                        <button class="eq-preset-btn active" data-preset="flat">Flat</button>
+                        <button class="eq-preset-btn" data-preset="bass">Bass Boost</button>
+                        <button class="eq-preset-btn" data-preset="vocal">Vocal</button>
+                        <button class="eq-preset-btn" data-preset="treble">Treble Boost</button>
+                    </div>
+
+                    <!-- Sliders -->
+                    <div class="eq-sliders-container">
+                        <div class="eq-slider-group">
+                            <div class="eq-slider-header">
+                                <span class="eq-slider-label">Bass</span>
+                                <span class="eq-slider-value" id="eq-val-bass">50%</span>
+                            </div>
+                            <input type="range" class="eq-slider" id="eq-slider-bass" min="0" max="100" value="50">
+                        </div>
+
+                        <div class="eq-slider-group">
+                            <div class="eq-slider-header">
+                                <span class="eq-slider-label">Midrange</span>
+                                <span class="eq-slider-value" id="eq-val-mid">50%</span>
+                            </div>
+                            <input type="range" class="eq-slider" id="eq-slider-mid" min="0" max="100" value="50">
+                        </div>
+
+                        <div class="eq-slider-group">
+                            <div class="eq-slider-header">
+                                <span class="eq-slider-label">Treble</span>
+                                <span class="eq-slider-value" id="eq-val-treble">50%</span>
+                            </div>
+                            <input type="range" class="eq-slider" id="eq-slider-treble" min="0" max="100" value="50">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Track Context Menu Modal -->
+        <div id="modal-track-menu" class="context-modal" style="display: none;">
+            <div class="modal-backdrop" onclick="window.uiManager.closeTrackMenu()"></div>
+            <div class="context-menu-content">
+                <div class="context-menu-header">
+                    <img id="context-menu-artwork" src="/assets/covers/default.svg" class="context-artwork" alt="">
+                    <div class="context-meta">
+                        <div id="context-menu-title" class="context-title">-</div>
+                        <div id="context-menu-artist" class="context-artist">-</div>
+                    </div>
+                </div>
+                <div class="context-menu-options">
+                    <button class="context-option" id="ctx-play-next">
+                        <i data-lucide="play-circle"></i>
+                        <span>Play Next</span>
+                    </button>
+                    <button class="context-option" id="ctx-add-queue">
+                        <i data-lucide="list-plus"></i>
+                        <span>Add to Queue</span>
+                    </button>
+                    <button class="context-option" id="ctx-favorite">
+                        <i data-lucide="heart"></i>
+                        <span id="ctx-fav-label">Favorite</span>
+                    </button>
+                    <button class="context-option" id="ctx-download">
+                        <i data-lucide="download"></i>
+                        <span id="ctx-dl-label">Download</span>
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -320,6 +450,7 @@
     <!-- Scripts -->
     <script type="module" src="/js/storage.js"></script>
     <script type="module" src="/js/offline-manager.js"></script>
+    <script type="module" src="/js/artwork.js"></script>
     <script type="module" src="/js/player.js"></script>
     <script type="module" src="/js/ui.js"></script>
     <script type="module" src="/js/app.js"></script>

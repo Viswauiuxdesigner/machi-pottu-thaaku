@@ -57,6 +57,13 @@ public class AudioSource extends Binder {
 
     private PowerManager.WakeLock transitionWakeLock;
 
+    public String currentQueueItemUid = null;
+    public static final int REPEAT_MODE_OFF = 0;
+    public static final int REPEAT_MODE_ONE = 1;
+    public static final int REPEAT_MODE_ALL = 2;
+    private int masterRepeatMode = REPEAT_MODE_OFF;
+    private final java.util.concurrent.atomic.AtomicInteger pendingPreviousRequests = new java.util.concurrent.atomic.AtomicInteger(0);
+
     private final List<QueueItem> masterPlaylist = Collections.synchronizedList(new ArrayList<>());
     private final Set<String> enqueuedTrackIds = Collections.synchronizedSet(new HashSet<>());
     private final ExecutorService backgroundQueueExecutor = Executors.newSingleThreadExecutor();
@@ -66,6 +73,36 @@ public class AudioSource extends Binder {
     private boolean isReplenishing = false;
     private int consecutiveFailureCount = 0;
     private static final int MAX_CONSECUTIVE_FAILURES = 3;
+
+    public static boolean isValidLocalFile(String uriStr) {
+        if (uriStr == null || uriStr.trim().isEmpty()) return false;
+        try {
+            android.net.Uri uri = android.net.Uri.parse(uriStr);
+            String scheme = uri.getScheme();
+            if ("file".equalsIgnoreCase(scheme)) {
+                java.io.File file = new java.io.File(uri.getPath());
+                return file.exists() && file.length() > 0;
+            }
+            if ("content".equalsIgnoreCase(scheme)) {
+                return true;
+            }
+            return false;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public static String extractTrackIdFromMediaId(String mediaId) {
+        if (mediaId == null) return null;
+        int sep = mediaId.indexOf("::");
+        return (sep != -1) ? mediaId.substring(0, sep) : mediaId;
+    }
+
+    public static String extractQueueUidFromMediaId(String mediaId) {
+        if (mediaId == null) return null;
+        int sep = mediaId.indexOf("::");
+        return (sep != -1) ? mediaId.substring(sep + 2) : null;
+    }
 
     public AudioSource(
         AudioPlayerPlugin pluginOwner,
@@ -144,6 +181,7 @@ public class AudioSource extends Binder {
     }
 
     public static class QueueItem {
+        public final String queueItemUid;
         public String source;
         public String trackId;
         public String friendlyTitle;
@@ -166,6 +204,7 @@ public class AudioSource extends Binder {
             long urlFetchedAt,
             boolean isOffline
         ) {
+            this.queueItemUid = java.util.UUID.randomUUID().toString();
             this.source = source;
             this.trackId = trackId;
             this.friendlyTitle = friendlyTitle;
@@ -311,9 +350,8 @@ public class AudioSource extends Binder {
             .setUri(item.source)
             .setMediaMetadata(metaBuilder.build());
 
-        if (item.trackId != null && !item.trackId.isEmpty()) {
-            builder.setMediaId(item.trackId);
-        }
+        String mediaId = (item.trackId != null ? item.trackId : "") + "::" + item.queueItemUid;
+        builder.setMediaId(mediaId);
 
         return builder.build();
     }
@@ -345,6 +383,7 @@ public class AudioSource extends Binder {
 
         int safeIndex = Math.max(0, Math.min(startIndex, items.size() - 1));
         QueueItem current = items.get(safeIndex);
+        this.currentQueueItemUid = current.queueItemUid;
         this.trackId = current.trackId;
         this.source = current.source;
         if (audioMetadata != null) {
@@ -357,7 +396,9 @@ public class AudioSource extends Binder {
         java.util.List<MediaItem> initialMediaItems = new java.util.ArrayList<>();
         if (current.source != null && !current.source.isEmpty()) {
             initialMediaItems.add(buildMediaItem(current));
-            if (current.trackId != null) {
+            if (current.queueItemUid != null) {
+                enqueuedTrackIds.add(current.queueItemUid);
+            } else if (current.trackId != null) {
                 enqueuedTrackIds.add(current.trackId);
             }
         }
@@ -366,7 +407,9 @@ public class AudioSource extends Binder {
             QueueItem nextItem = items.get(i);
             if (nextItem.source != null && !nextItem.source.isEmpty()) {
                 initialMediaItems.add(buildMediaItem(nextItem));
-                if (nextItem.trackId != null) {
+                if (nextItem.queueItemUid != null) {
+                    enqueuedTrackIds.add(nextItem.queueItemUid);
+                } else if (nextItem.trackId != null) {
                     enqueuedTrackIds.add(nextItem.trackId);
                 }
             }
@@ -393,12 +436,17 @@ public class AudioSource extends Binder {
                 if (player == null) return;
 
                 String currentPlayingTrackId = this.trackId;
+                String currentPlayingUid = this.currentQueueItemUid;
                 int currentMasterIdx = -1;
                 synchronized (masterPlaylist) {
                     for (int i = 0; i < masterPlaylist.size(); i++) {
-                        if (masterPlaylist.get(i).trackId != null && masterPlaylist.get(i).trackId.equals(currentPlayingTrackId)) {
+                        QueueItem q = masterPlaylist.get(i);
+                        if (currentPlayingUid != null && currentPlayingUid.equals(q.queueItemUid)) {
                             currentMasterIdx = i;
                             break;
+                        }
+                        if (currentMasterIdx == -1 && currentPlayingTrackId != null && currentPlayingTrackId.equals(q.trackId)) {
+                            currentMasterIdx = i;
                         }
                     }
                 }
@@ -412,21 +460,29 @@ public class AudioSource extends Binder {
                     masterCount = masterPlaylist.size();
                 }
 
-                int targetEnd = Math.min(masterCount, currentMasterIdx + 1 + LOOKAHEAD_WINDOW);
-                for (int i = currentMasterIdx + 1; i < targetEnd; i++) {
+                int lookaheadSteps = Math.min(LOOKAHEAD_WINDOW, masterCount > 0 ? masterCount - 1 : 0);
+                for (int step = 1; step <= lookaheadSteps; step++) {
+                    int i = currentMasterIdx + step;
+                    if (masterRepeatMode == REPEAT_MODE_ALL && masterCount > 0) {
+                        i = i % masterCount;
+                    } else if (i >= masterCount) {
+                        break;
+                    }
+
                     QueueItem item;
                     synchronized (masterPlaylist) {
                         item = masterPlaylist.get(i);
                     }
                     if (item == null) continue;
 
-                    if (item.trackId != null && enqueuedTrackIds.contains(item.trackId)) {
+                    String lookaheadKey = (item.queueItemUid != null) ? item.queueItemUid : item.trackId;
+                    if (lookaheadKey != null && enqueuedTrackIds.contains(lookaheadKey)) {
                         continue;
                     }
 
                     if (item.isOfflineTrack()) {
-                        if (item.source == null || item.source.isEmpty()) {
-                            Log.w(TAG, "Offline track missing verified local source, refusing to stream online: " + item.trackId);
+                        if (item.source == null || !isValidLocalFile(item.source)) {
+                            Log.w(TAG, "Offline track missing verified local source on disk: " + item.trackId);
                             continue;
                         }
                     } else if (item.source == null || item.source.isEmpty() || item.isUrlExpired()) {
@@ -450,16 +506,17 @@ public class AudioSource extends Binder {
                             if (p != null) {
                                 synchronized (enqueuedTrackIds) {
                                     boolean alreadyInPlayer = false;
-                                    if (readyItem.trackId != null) {
-                                        if (enqueuedTrackIds.contains(readyItem.trackId)) {
+                                    String itemKey = (readyItem.queueItemUid != null) ? readyItem.queueItemUid : readyItem.trackId;
+                                    if (itemKey != null) {
+                                        if (enqueuedTrackIds.contains(itemKey)) {
                                             alreadyInPlayer = true;
                                         } else {
                                             int pCount = p.getMediaItemCount();
                                             for (int pi = 0; pi < pCount; pi++) {
                                                 MediaItem pItem = p.getMediaItemAt(pi);
-                                                if (pItem.mediaId != null && pItem.mediaId.equals(readyItem.trackId)) {
+                                                if (pItem.mediaId != null && (pItem.mediaId.endsWith("::" + readyItem.queueItemUid) || pItem.mediaId.equals(readyItem.trackId))) {
                                                     alreadyInPlayer = true;
-                                                    enqueuedTrackIds.add(readyItem.trackId);
+                                                    enqueuedTrackIds.add(itemKey);
                                                     break;
                                                 }
                                             }
@@ -467,10 +524,10 @@ public class AudioSource extends Binder {
                                     }
                                     if (!alreadyInPlayer) {
                                         p.addMediaItem(buildMediaItem(readyItem));
-                                        if (readyItem.trackId != null) {
-                                            enqueuedTrackIds.add(readyItem.trackId);
+                                        if (itemKey != null) {
+                                            enqueuedTrackIds.add(itemKey);
                                         }
-                                        Log.i(TAG, "Autonomous native enqueue: added " + readyItem.trackId + " (total player items=" + p.getMediaItemCount() + ")");
+                                        Log.i(TAG, "Autonomous native enqueue: added " + readyItem.trackId + " (uid=" + readyItem.queueItemUid + ", total player items=" + p.getMediaItemCount() + ")");
                                     }
                                 }
                             }
@@ -504,9 +561,15 @@ public class AudioSource extends Binder {
 
         QueueItem failedItem = null;
         if (currentMediaId != null) {
+            String targetUid = extractQueueUidFromMediaId(currentMediaId);
+            String targetTrackId = extractTrackIdFromMediaId(currentMediaId);
             synchronized (masterPlaylist) {
                 for (QueueItem item : masterPlaylist) {
-                    if (currentMediaId.equals(item.trackId)) {
+                    if (targetUid != null && targetUid.equals(item.queueItemUid)) {
+                        failedItem = item;
+                        break;
+                    }
+                    if (targetUid == null && targetTrackId != null && targetTrackId.equals(item.trackId)) {
                         failedItem = item;
                         break;
                     }
@@ -518,6 +581,12 @@ public class AudioSource extends Binder {
         if (consecutiveFailureCount >= MAX_CONSECUTIVE_FAILURES) {
             Log.e(TAG, "Circuit breaker tripped: " + consecutiveFailureCount + " consecutive track failures. Halting auto-recovery.");
             haltPlaybackOnError("Playback stopped after multiple failures. Tap play to retry when connected.");
+            return;
+        }
+
+        if (failedItem != null && failedItem.isOfflineTrack()) {
+            Log.e(TAG, "Offline track failed to play (missing or corrupt file): " + failedItem.trackId);
+            haltPlaybackOnError("Downloaded file missing or damaged. Please re-download.");
             return;
         }
 
@@ -614,12 +683,25 @@ public class AudioSource extends Binder {
         QueueItem nextItem = null;
         synchronized (masterPlaylist) {
             for (int i = 0; i < masterPlaylist.size(); i++) {
-                if (masterPlaylist.get(i).trackId != null && masterPlaylist.get(i).trackId.equals(this.trackId)) {
+                QueueItem item = masterPlaylist.get(i);
+                if (this.currentQueueItemUid != null && this.currentQueueItemUid.equals(item.queueItemUid)) {
                     if (i + 1 < masterPlaylist.size()) {
                         nextMasterIdx = i + 1;
                         nextItem = masterPlaylist.get(i + 1);
+                    } else if (masterRepeatMode == REPEAT_MODE_ALL && masterPlaylist.size() > 0) {
+                        nextMasterIdx = 0;
+                        nextItem = masterPlaylist.get(0);
                     }
                     break;
+                }
+                if (nextMasterIdx == -1 && this.trackId != null && this.trackId.equals(item.trackId)) {
+                    if (i + 1 < masterPlaylist.size()) {
+                        nextMasterIdx = i + 1;
+                        nextItem = masterPlaylist.get(i + 1);
+                    } else if (masterRepeatMode == REPEAT_MODE_ALL && masterPlaylist.size() > 0) {
+                        nextMasterIdx = 0;
+                        nextItem = masterPlaylist.get(0);
+                    }
                 }
             }
         }
@@ -630,7 +712,13 @@ public class AudioSource extends Binder {
             backgroundQueueExecutor.execute(() -> {
                 boolean transitionDispatched = false;
                 try {
-                    if (!itemToPlay.isOfflineTrack() && (itemToPlay.source == null || itemToPlay.source.isEmpty() || itemToPlay.isUrlExpired())) {
+                    if (itemToPlay.isOfflineTrack()) {
+                        if (itemToPlay.source == null || !isValidLocalFile(itemToPlay.source)) {
+                            Log.e(TAG, "advanceNextInMaster: Offline track missing or corrupt: " + itemToPlay.trackId);
+                            mainHandler.post(() -> haltPlaybackOnError("Downloaded file missing or damaged. Please re-download."));
+                            return;
+                        }
+                    } else if (itemToPlay.source == null || itemToPlay.source.isEmpty() || itemToPlay.isUrlExpired()) {
                         if (itemToPlay.s3Key != null) {
                             String url = fetchSignedUrl(resolveEndpoint, itemToPlay.s3Key);
                             if (url != null) {
@@ -639,12 +727,17 @@ public class AudioSource extends Binder {
                             }
                         }
                     }
+
                     if (itemToPlay.source != null && !itemToPlay.source.isEmpty()) {
                         transitionDispatched = true;
                         boolean posted = mainHandler.post(() -> {
                             Player p = (targetPlayer != null) ? targetPlayer : getPlayer();
                             if (p != null) {
                                 try {
+                                    this.currentQueueItemUid = itemToPlay.queueItemUid;
+                                    this.trackId = itemToPlay.trackId;
+                                    this.source = itemToPlay.source;
+
                                     int currentIdx = p.getCurrentMediaItemIndex();
                                     int count = p.getMediaItemCount();
                                     boolean alreadyAfterCurrent = false;
@@ -652,7 +745,7 @@ public class AudioSource extends Binder {
 
                                     for (int pi = currentIdx + 1; pi < count; pi++) {
                                         MediaItem pItem = p.getMediaItemAt(pi);
-                                        if (pItem.mediaId != null && pItem.mediaId.equals(itemToPlay.trackId)) {
+                                        if (pItem.mediaId != null && pItem.mediaId.endsWith("::" + itemToPlay.queueItemUid)) {
                                             alreadyAfterCurrent = true;
                                             targetIndex = pi;
                                             break;
@@ -663,7 +756,9 @@ public class AudioSource extends Binder {
                                         p.addMediaItem(buildMediaItem(itemToPlay));
                                         targetIndex = p.getMediaItemCount() - 1;
                                         synchronized (enqueuedTrackIds) {
-                                            if (itemToPlay.trackId != null) {
+                                            if (itemToPlay.queueItemUid != null) {
+                                                enqueuedTrackIds.add(itemToPlay.queueItemUid);
+                                            } else if (itemToPlay.trackId != null) {
                                                 enqueuedTrackIds.add(itemToPlay.trackId);
                                             }
                                         }
@@ -702,10 +797,253 @@ public class AudioSource extends Binder {
         return false;
     }
 
+    public boolean advancePreviousInMaster() {
+        return advancePreviousInMaster(null);
+    }
+
+    public boolean advancePreviousInMaster(Player targetPlayer) {
+        Player player = (targetPlayer != null) ? targetPlayer : getPlayer();
+        if (player == null) return false;
+
+        pendingPreviousRequests.incrementAndGet();
+
+        mainHandler.post(() -> {
+            int skipCount = pendingPreviousRequests.getAndSet(0);
+            if (skipCount <= 0) return;
+
+            Player p = (targetPlayer != null) ? targetPlayer : getPlayer();
+            if (p == null) return;
+
+            int currentExoIdx = p.getCurrentMediaItemIndex();
+            if (currentExoIdx >= skipCount) {
+                p.seekToDefaultPosition(currentExoIdx - skipCount);
+                p.prepare();
+                p.play();
+                return;
+            }
+
+            int currentMasterIdx = -1;
+            synchronized (masterPlaylist) {
+                for (int i = 0; i < masterPlaylist.size(); i++) {
+                    QueueItem item = masterPlaylist.get(i);
+                    if (this.currentQueueItemUid != null && this.currentQueueItemUid.equals(item.queueItemUid)) {
+                        currentMasterIdx = i;
+                        break;
+                    }
+                    if (currentMasterIdx == -1 && this.trackId != null && this.trackId.equals(item.trackId)) {
+                        currentMasterIdx = i;
+                    }
+                }
+            }
+
+            if (currentMasterIdx == -1) {
+                p.seekTo(0);
+                return;
+            }
+
+            int targetMasterIdx = currentMasterIdx - skipCount;
+            int masterCount;
+            synchronized (masterPlaylist) {
+                masterCount = masterPlaylist.size();
+            }
+
+            if (targetMasterIdx < 0) {
+                if (masterRepeatMode == REPEAT_MODE_ALL && masterCount > 0) {
+                    targetMasterIdx = ((targetMasterIdx % masterCount) + masterCount) % masterCount;
+                } else {
+                    Log.i(TAG, "advancePreviousInMaster: Start of playlist reached (Repeat Off). Seeking to 0:00.");
+                    p.seekTo(0);
+                    return;
+                }
+            }
+
+            QueueItem itemToPlay;
+            synchronized (masterPlaylist) {
+                itemToPlay = masterPlaylist.get(targetMasterIdx);
+            }
+
+            if (itemToPlay == null) return;
+
+            acquireTransitionWakeLock();
+            final QueueItem targetItem = itemToPlay;
+            backgroundQueueExecutor.execute(() -> {
+                boolean transitionDispatched = false;
+                try {
+                    if (targetItem.isOfflineTrack()) {
+                        if (targetItem.source == null || !isValidLocalFile(targetItem.source)) {
+                            Log.e(TAG, "advancePreviousInMaster: Offline track missing or corrupt: " + targetItem.trackId);
+                            mainHandler.post(() -> haltPlaybackOnError("Downloaded file missing or damaged. Please re-download."));
+                            return;
+                        }
+                    } else if (targetItem.source == null || targetItem.source.isEmpty() || targetItem.isUrlExpired()) {
+                        if (targetItem.s3Key != null) {
+                            String url = fetchSignedUrl(resolveEndpoint, targetItem.s3Key);
+                            if (url != null) {
+                                targetItem.source = url;
+                                targetItem.urlFetchedAt = System.currentTimeMillis();
+                            }
+                        }
+                    }
+
+                    if (targetItem.source != null && !targetItem.source.isEmpty()) {
+                        transitionDispatched = true;
+                        mainHandler.post(() -> {
+                            Player pl = (targetPlayer != null) ? targetPlayer : getPlayer();
+                            if (pl != null) {
+                                try {
+                                    this.currentQueueItemUid = targetItem.queueItemUid;
+                                    this.trackId = targetItem.trackId;
+                                    this.source = targetItem.source;
+
+                                    MediaItem mi = buildMediaItem(targetItem);
+                                    pl.addMediaItem(0, mi);
+                                    synchronized (enqueuedTrackIds) {
+                                        if (targetItem.queueItemUid != null) {
+                                            enqueuedTrackIds.add(targetItem.queueItemUid);
+                                        } else if (targetItem.trackId != null) {
+                                            enqueuedTrackIds.add(targetItem.trackId);
+                                        }
+                                    }
+                                    pl.seekToDefaultPosition(0);
+                                    pl.prepare();
+                                    pl.play();
+                                    replenishQueueLookahead();
+                                } catch (Exception ex) {
+                                    Log.e(TAG, "Error playing previous master item in ExoPlayer", ex);
+                                    releaseTransitionWakeLock();
+                                }
+                            } else {
+                                releaseTransitionWakeLock();
+                            }
+                        });
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error in advancePreviousInMaster background worker", e);
+                } finally {
+                    if (!transitionDispatched) {
+                        releaseTransitionWakeLock();
+                    }
+                }
+            });
+        });
+
+        return true;
+    }
+
+    public void playNext(QueueItem item) {
+        if (item == null) return;
+        Player player = getPlayer();
+        if (player == null) return;
+
+        mainHandler.post(() -> {
+            int insertMasterIdx = 0;
+            synchronized (masterPlaylist) {
+                int currentIdx = -1;
+                for (int i = 0; i < masterPlaylist.size(); i++) {
+                    if (this.currentQueueItemUid != null && this.currentQueueItemUid.equals(masterPlaylist.get(i).queueItemUid)) {
+                        currentIdx = i;
+                        break;
+                    }
+                    if (currentIdx == -1 && this.trackId != null && this.trackId.equals(masterPlaylist.get(i).trackId)) {
+                        currentIdx = i;
+                    }
+                }
+                insertMasterIdx = (currentIdx != -1) ? currentIdx + 1 : masterPlaylist.size();
+                masterPlaylist.add(insertMasterIdx, item);
+            }
+
+            int currentExoIdx = player.getCurrentMediaItemIndex();
+            int insertExoIdx = currentExoIdx + 1;
+            player.addMediaItem(insertExoIdx, buildMediaItem(item));
+            synchronized (enqueuedTrackIds) {
+                if (item.queueItemUid != null) {
+                    enqueuedTrackIds.add(item.queueItemUid);
+                } else if (item.trackId != null) {
+                    enqueuedTrackIds.add(item.trackId);
+                }
+            }
+            Log.i(TAG, "playNext: Inserted " + item.trackId + " at master index " + insertMasterIdx + ", exo index " + insertExoIdx);
+        });
+    }
+
+    public void removeQueueItem(String queueItemUid) {
+        if (queueItemUid == null) return;
+        mainHandler.post(() -> {
+            synchronized (masterPlaylist) {
+                for (int i = masterPlaylist.size() - 1; i >= 0; i--) {
+                    if (queueItemUid.equals(masterPlaylist.get(i).queueItemUid)) {
+                        masterPlaylist.remove(i);
+                        break;
+                    }
+                }
+            }
+            synchronized (enqueuedTrackIds) {
+                enqueuedTrackIds.remove(queueItemUid);
+            }
+            Player player = getPlayer();
+            if (player != null) {
+                int currentIdx = player.getCurrentMediaItemIndex();
+                for (int i = player.getMediaItemCount() - 1; i > currentIdx; i--) {
+                    MediaItem mi = player.getMediaItemAt(i);
+                    if (mi.mediaId != null && mi.mediaId.endsWith("::" + queueItemUid)) {
+                        player.removeMediaItem(i);
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    public void setRepeatMode(int mode) {
+        this.masterRepeatMode = mode;
+        Player player = getPlayer();
+        if (player != null) {
+            mainHandler.post(() -> {
+                if (mode == REPEAT_MODE_ONE) {
+                    player.setRepeatMode(Player.REPEAT_MODE_ONE);
+                } else {
+                    player.setRepeatMode(Player.REPEAT_MODE_OFF);
+                }
+            });
+        }
+        replenishQueueLookahead();
+    }
+
+    public int getRepeatMode() {
+        return masterRepeatMode;
+    }
+
+    public List<QueueItem> getMasterPlaylist() {
+        return masterPlaylist;
+    }
+
+    public String getCurrentQueueItemUid() {
+        return currentQueueItemUid;
+    }
+
+    public int getCurrentMasterIndex() {
+        synchronized (masterPlaylist) {
+            for (int i = 0; i < masterPlaylist.size(); i++) {
+                QueueItem item = masterPlaylist.get(i);
+                if (currentQueueItemUid != null && currentQueueItemUid.equals(item.queueItemUid)) {
+                    return i;
+                }
+                if (trackId != null && trackId.equals(item.trackId)) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
     public void addQueueItems(java.util.List<QueueItem> items) {
         Player player = getPlayer();
         if (player == null || items == null || items.isEmpty()) {
             return;
+        }
+
+        synchronized (masterPlaylist) {
+            masterPlaylist.addAll(items);
         }
 
         try {
@@ -724,12 +1062,13 @@ public class AudioSource extends Binder {
             java.util.List<MediaItem> newMediaItems = new java.util.ArrayList<>();
             for (QueueItem qItem : items) {
                 if (qItem.source != null && !qItem.source.isEmpty()) {
-                    if (qItem.trackId == null || !existingIds.contains(qItem.trackId)) {
+                    String qKey = (qItem.queueItemUid != null) ? qItem.queueItemUid : qItem.trackId;
+                    if (qKey == null || !existingIds.contains(qKey)) {
                         newMediaItems.add(buildMediaItem(qItem));
-                        if (qItem.trackId != null) {
-                            existingIds.add(qItem.trackId);
+                        if (qKey != null) {
+                            existingIds.add(qKey);
                             synchronized (enqueuedTrackIds) {
-                                enqueuedTrackIds.add(qItem.trackId);
+                                enqueuedTrackIds.add(qKey);
                             }
                         }
                     }
@@ -774,7 +1113,8 @@ public class AudioSource extends Binder {
         if (expectedCurrentTrackId != null && !expectedCurrentTrackId.isEmpty()) {
             MediaItem currentItem = player.getCurrentMediaItem();
             if (currentItem != null && currentItem.mediaId != null && !currentItem.mediaId.isEmpty()) {
-                if (!currentItem.mediaId.equals(expectedCurrentTrackId)) {
+                String currentTrackId = extractTrackIdFromMediaId(currentItem.mediaId);
+                if (!currentItem.mediaId.equals(expectedCurrentTrackId) && !currentTrackId.equals(expectedCurrentTrackId)) {
                     Log.w(
                         TAG,
                         "Ignoring stale queueNext: player current mediaId=" +
@@ -791,7 +1131,7 @@ public class AudioSource extends Binder {
             int count = player.getMediaItemCount();
             for (int i = 0; i < count; i++) {
                 MediaItem item = player.getMediaItemAt(i);
-                if (nextTrackId != null && nextTrackId.equals(item.mediaId)) {
+                if (nextTrackId != null && (nextTrackId.equals(item.mediaId) || nextTrackId.equals(extractTrackIdFromMediaId(item.mediaId)))) {
                     Log.i(TAG, "Track already in ExoPlayer queue at index " + i + ": " + nextTrackId);
                     synchronized (enqueuedTrackIds) {
                         enqueuedTrackIds.add(nextTrackId);
@@ -841,7 +1181,14 @@ public class AudioSource extends Binder {
     public void updateCurrentMedia(MediaItem currentItem) {
         if (currentItem != null) {
             if (currentItem.mediaId != null && !currentItem.mediaId.isEmpty()) {
-                this.trackId = currentItem.mediaId;
+                String fullId = currentItem.mediaId;
+                int sep = fullId.indexOf("::");
+                if (sep != -1) {
+                    this.trackId = fullId.substring(0, sep);
+                    this.currentQueueItemUid = fullId.substring(sep + 2);
+                } else {
+                    this.trackId = fullId;
+                }
             }
             if (
                 currentItem.localConfiguration != null &&

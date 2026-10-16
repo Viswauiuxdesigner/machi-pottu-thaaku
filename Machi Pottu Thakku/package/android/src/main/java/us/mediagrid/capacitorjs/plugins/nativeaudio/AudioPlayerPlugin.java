@@ -332,6 +332,168 @@ public class AudioPlayerPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void playNext(PluginCall call) {
+        try {
+            if (!audioSourceExists("playNext", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            com.getcapacitor.JSObject rawObj = call.getObject("item");
+            if (rawObj == null) {
+                call.reject("item object is required");
+                return;
+            }
+            AudioSource.QueueItem item = new AudioSource.QueueItem(
+                rawObj.getString("source"),
+                rawObj.getString("trackId"),
+                rawObj.getString("friendlyTitle"),
+                rawObj.getString("artistName"),
+                rawObj.getString("albumTitle"),
+                rawObj.getString("artworkSource"),
+                rawObj.getString("s3Key"),
+                rawObj.optLong("urlFetchedAt", 0L),
+                rawObj.optBoolean("isOffline", false)
+            );
+
+            postToLooper("playNext", call, () -> {
+                audioSource.playNext(item);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue inserting playNext track.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void removeQueueItem(PluginCall call) {
+        try {
+            if (!audioSourceExists("removeQueueItem", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            String queueItemUid = call.getString("queueItemUid");
+            if (queueItemUid == null || queueItemUid.isEmpty()) {
+                call.reject("queueItemUid is required");
+                return;
+            }
+
+            postToLooper("removeQueueItem", call, () -> {
+                audioSource.removeQueueItem(queueItemUid);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue removing queue item.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setRepeatMode(PluginCall call) {
+        try {
+            if (!audioSourceExists("setRepeatMode", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            int mode = call.getInt("mode", 0);
+
+            postToLooper("setRepeatMode", call, () -> {
+                audioSource.setRepeatMode(mode);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting repeat mode.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getRepeatMode(PluginCall call) {
+        try {
+            if (!audioSourceExists("getRepeatMode", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            JSObject ret = new JSObject();
+            ret.put("mode", audioSource.getRepeatMode());
+            call.resolve(ret);
+        } catch (Exception ex) {
+            call.reject("There was an issue getting repeat mode.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getQueue(PluginCall call) {
+        try {
+            if (!audioSourceExists("getQueue", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            java.util.List<AudioSource.QueueItem> list = audioSource.getMasterPlaylist();
+            com.getcapacitor.JSArray arr = new com.getcapacitor.JSArray();
+            synchronized (list) {
+                for (AudioSource.QueueItem item : list) {
+                    JSObject obj = new JSObject();
+                    obj.put("queueItemUid", item.queueItemUid);
+                    obj.put("trackId", item.trackId);
+                    obj.put("friendlyTitle", item.friendlyTitle);
+                    obj.put("artistName", item.artistName);
+                    obj.put("albumTitle", item.albumTitle);
+                    obj.put("artworkSource", item.artworkSource);
+                    obj.put("source", item.source);
+                    obj.put("isOffline", item.isOffline);
+                    arr.put(obj);
+                }
+            }
+            JSObject res = new JSObject();
+            res.put("queue", arr);
+            res.put("currentIndex", audioSource.getCurrentMasterIndex());
+            res.put("currentQueueItemUid", audioSource.getCurrentQueueItemUid());
+            call.resolve(res);
+        } catch (Exception ex) {
+            call.reject("There was an issue getting the queue.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setEqualizerBands(PluginCall call) {
+        try {
+            int bass = call.getInt("bass", 50);
+            int mid = call.getInt("mid", 50);
+            int treble = call.getInt("treble", 50);
+
+            AudioPlayerService.AudioEffectsManager fx = getAudioEffectsManager();
+            fx.setBandLevels(bass, mid, treble);
+
+            JSObject res = toJSObject(fx.getStatus());
+            call.resolve(res);
+        } catch (Exception ex) {
+            call.reject("There was an issue setting equalizer bands.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getEqualizerStatus(PluginCall call) {
+        try {
+            AudioPlayerService.AudioEffectsManager fx = getAudioEffectsManager();
+            JSObject res = toJSObject(fx.getStatus());
+            call.resolve(res);
+        } catch (Exception ex) {
+            call.reject("There was an issue getting equalizer status.", ex);
+        }
+    }
+
+    private AudioPlayerService.AudioEffectsManager getAudioEffectsManager() {
+        AudioPlayerService service = AudioPlayerService.getInstance();
+        if (service != null && service.getAudioEffectsManager() != null) {
+            return service.getAudioEffectsManager();
+        }
+        return new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+    }
+
+    @PluginMethod
     public void queueNext(PluginCall call) {
         try {
             if (!audioSourceExists("queueNext", call)) {

@@ -126,10 +126,15 @@ public class PlayerEventListener implements Listener {
             }
 
             if (plugin != null) {
+                String cleanTrackId = AudioSource.extractTrackIdFromMediaId(transitionedTrackId);
+                String queueUid = AudioSource.extractQueueUidFromMediaId(transitionedTrackId);
+
                 JSObject data = new JSObject();
                 data.put("reason", reason == MEDIA_ITEM_TRANSITION_REASON_AUTO ? "auto" : "seek");
                 data.put("fromTrackId", fromTrackId != null ? fromTrackId : "");
-                data.put("trackId", transitionedTrackId != null ? transitionedTrackId : "");
+                data.put("trackId", cleanTrackId != null ? cleanTrackId : "");
+                data.put("queueItemUid", queueUid != null ? queueUid : "");
+                data.put("rawMediaId", transitionedTrackId != null ? transitionedTrackId : "");
                 data.put("source", transitionedSource != null ? transitionedSource : "");
                 int currentIdx = (audioSource != null && audioSource.getPlayer() != null) ? audioSource.getPlayer().getCurrentMediaItemIndex() : -1;
                 data.put("queueIndex", currentIdx);

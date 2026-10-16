@@ -9,6 +9,12 @@ class UIManager {
         this.currentPage = 'home';
         this.previousPage = 'home';
         this.pageHistory = ['home'];
+        this.selectedMenuTrack = null;
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => this.setupTrackMenuListeners());
+        } else {
+            this.setupTrackMenuListeners();
+        }
     }
 
     showPage(pageId, isBack = false) {
@@ -37,7 +43,7 @@ class UIManager {
                 el.classList.remove('active');
             }
         });
-        
+
         // Hide top app-header search icon while Downloads page is active
         const topSearchBtn = document.getElementById('top-header-search-btn');
         if (topSearchBtn) {
@@ -49,7 +55,7 @@ class UIManager {
         if (pageId === 'favorites') window.app.loadFavorites();
         if (pageId === 'downloads' && window.app.loadDownloads) window.app.loadDownloads();
         if (pageId === 'storage') window.app.updateStorageStats();
-        
+
         // Scroll to top
         const scrollContainer = document.querySelector('.scroll-container');
         if (scrollContainer) scrollContainer.scrollTop = 0;
@@ -112,19 +118,19 @@ class UIManager {
 
         const notif = document.createElement('div');
         notif.className = 'notification';
-        
+
         let icon = 'info';
         if (type === 'success') icon = 'check-circle';
         if (type === 'error' || type === 'warning') icon = 'alert-circle';
-        
+
         notif.innerHTML = `
             <i data-lucide="${icon}"></i>
             <span>${message}</span>
         `;
-        
+
         container.appendChild(notif);
         if (window.lucide) lucide.createIcons();
-        
+
         setTimeout(() => {
             notif.classList.add('hiding');
             notif.addEventListener('animationend', () => notif.remove());
@@ -140,57 +146,44 @@ class UIManager {
     }
 
     async loadTrackMetadata(track, durationElement) {
-        if (track.duration > 0) {
-            if (durationElement) durationElement.textContent = this.formatDuration(track.duration);
+        if (!track || !durationElement) {
             return;
         }
 
-        // Avoid unnecessary network calls if offline or if track is an offline download
-        const isOffline = !navigator.onLine || track.localPath || (window.OfflineManager && (window.OfflineManager.getLocalTrack(track.id) || (track.s3Key && window.OfflineManager.getLocalTrack(track.s3Key))));
-        if (isOffline) {
-            if (durationElement) durationElement.textContent = '--:--';
+        if (track.duration && isFinite(track.duration) && track.duration > 0) {
+            durationElement.textContent = this.formatDuration(track.duration);
             return;
         }
 
-        try {
-            const response = await fetch(window.getApiUrl(`/.netlify/functions/music-play?key=${encodeURIComponent(track.s3Key)}`));
-            if (!response.ok) return;
-            const data = await response.json();
-            if (!data.url) return;
-
-            const tempAudio = new Audio();
-            tempAudio.preload = "metadata";
-            
-            tempAudio.addEventListener('loadedmetadata', () => {
-                if (tempAudio.duration && isFinite(tempAudio.duration)) {
-                    track.duration = tempAudio.duration;
-                    if (durationElement) {
-                        durationElement.textContent = this.formatDuration(track.duration);
-                    }
-                    if (window.app && window.app.updateCachedLibrary) {
-                        window.app.updateCachedLibrary(track);
-                    }
+        // Check if offline manager has duration cached for this track
+        if (window.OfflineManager) {
+            const local = window.OfflineManager.getLocalTrack(track.id) || (track.s3Key && window.OfflineManager.getLocalTrack(track.s3Key));
+            if (local && local.duration && isFinite(local.duration) && local.duration > 0) {
+                track.duration = local.duration;
+                durationElement.textContent = this.formatDuration(track.duration);
+                if (window.app && window.app.updateCachedLibrary) {
+                    window.app.updateCachedLibrary(track);
                 }
-                tempAudio.removeAttribute('src'); // Cleanup
-            });
-            tempAudio.src = data.url;
-        } catch (e) {
-            // Silently ignore network metadata errors when offline
+                return;
+            }
         }
+
+        durationElement.textContent = '--:--';
     }
 
     async createTrackRow(track, queueList, index, isDownloadsView = false) {
         const isFav = window.storageManager.isFavorite(track.id);
         const lastPlayedId = window.player ? window.player.getLastPlayedTrackId() : (localStorage.getItem('mpt_last_played_track') || null);
-        
+
         const row = document.createElement('div');
         row.className = 'track-row' + (lastPlayedId && track.id === lastPlayedId ? ' last-played-highlight' : '');
         row.dataset.id = track.id;
-        
-        const artworkHtml = track.thumbnail ?
-            `<img src="${track.thumbnail}" class="track-artwork" loading="lazy" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';"><div class="track-artwork placeholder" style="display:none;"><i data-lucide="music"></i></div>` :
-            `<div class="track-artwork placeholder"><i data-lucide="music"></i></div>`;
-            
+
+        const artworkUrl = (typeof window.getReliableArtwork === 'function')
+            ? window.getReliableArtwork(track)
+            : (track.thumbnail || '/assets/covers/default.svg');
+        const artworkHtml = `<img src="${artworkUrl}" class="track-artwork" loading="lazy" onerror="this.src='/assets/covers/default.svg';">`;
+
         let actionsHtml = '';
         if (isDownloadsView) {
             actionsHtml = `
@@ -201,24 +194,30 @@ class UIManager {
                 <button class="icon-btn action-delete-dl" title="Delete Download" aria-label="Delete Download" style="color: var(--primary-color);">
                     <i data-lucide="trash-2"></i>
                 </button>
+                <button class="icon-btn action-more" title="More options" aria-label="More options">
+                    <i data-lucide="more-vertical"></i>
+                </button>
             `;
         } else {
             actionsHtml = `
                 <button class="icon-btn action-fav ${isFav ? 'active' : ''}" title="Favorite" aria-label="Favorite">
                     <i data-lucide="heart" ${isFav ? 'fill="currentColor"' : ''}></i>
                 </button>
-                
+
                 <button class="icon-btn action-download" title="Download" aria-label="Download">
                     <i data-lucide="download"></i>
                 </button>
-                
+
                 <span class="track-duration">${this.formatDuration(track.duration)}</span>
                 <button class="icon-btn action-play" aria-label="Play" data-video-id="${track.videoId || ''}">
                     <i data-lucide="play"></i>
                 </button>
+                <button class="icon-btn action-more" title="More options" aria-label="More options">
+                    <i data-lucide="more-vertical"></i>
+                </button>
             `;
         }
-            
+
         row.innerHTML = `
             ${artworkHtml}
             <div class="track-info">
@@ -229,7 +228,7 @@ class UIManager {
                 ${actionsHtml}
             </div>
         `;
-        
+
         // Play action
         const playBtn = row.querySelector('.action-play');
         playBtn.addEventListener('click', (e) => {
@@ -239,7 +238,7 @@ class UIManager {
             const queueToPlay = isDownloadsView ? queueList.map(t => ({ ...t, _fromDownloads: true })) : queueList;
             window.player.playTrack(trackToPlay, queueToPlay, index);
         });
-        
+
         // Row click plays track
         row.addEventListener('click', () => {
             console.log("[UI] PLAY TRACK");
@@ -247,7 +246,7 @@ class UIManager {
             const queueToPlay = isDownloadsView ? queueList.map(t => ({ ...t, _fromDownloads: true })) : queueList;
             window.player.playTrack(trackToPlay, queueToPlay, index);
         });
-        
+
         const favBtn = row.querySelector('.action-fav');
         if (favBtn) {
             favBtn.addEventListener('click', (e) => {
@@ -259,12 +258,12 @@ class UIManager {
                 else icon.removeAttribute('fill');
             });
         }
-        
+
         const durationSpan = row.querySelector('.track-duration');
         if (!track.duration) {
             this.loadTrackMetadata(track, durationSpan);
         }
-        
+
         if (isDownloadsView) {
             const delBtn = row.querySelector('.action-delete-dl');
             if (delBtn && window.OfflineManager) {
@@ -280,7 +279,7 @@ class UIManager {
             }
         } else {
             const dlBtn = row.querySelector('.action-download');
-            
+
             // Initial state
             if (dlBtn && window.OfflineManager) {
                 window.OfflineManager.isDownloaded(track.id).then(isDl => {
@@ -290,12 +289,12 @@ class UIManager {
                         if (window.lucide) lucide.createIcons({root: dlBtn});
                     }
                 });
-                
+
                 dlBtn.addEventListener('click', async (e) => {
                     e.stopPropagation();
-                    
+
                     const isDl = await window.OfflineManager.isDownloaded(track.id);
-                    
+
                     if (isDl) {
                         // Delete
                         if (confirm('Remove from downloads?')) {
@@ -303,7 +302,7 @@ class UIManager {
                             dlBtn.classList.remove('active');
                             dlBtn.innerHTML = `<i data-lucide="download"></i>`;
                             if (window.lucide) lucide.createIcons({root: dlBtn});
-                            
+
                             // If we are on the downloads page, refresh
                             if (document.getElementById('page-downloads').classList.contains('active') && window.app && window.app.loadDownloads) {
                                 window.app.loadDownloads();
@@ -313,13 +312,13 @@ class UIManager {
                         // Download
                         dlBtn.innerHTML = `<i data-lucide="loader" class="spin"></i>`;
                         if (window.lucide) lucide.createIcons({root: dlBtn});
-                        
+
                         try {
                             await window.OfflineManager.downloadTrack(track);
                             dlBtn.classList.add('active');
                             dlBtn.innerHTML = `<i data-lucide="check-circle" style="color: var(--accent-color)"></i>`;
                             window.uiManager.showNotification('Song downloaded', 'success');
-                            
+
                             if (document.getElementById('page-downloads')?.classList.contains('active') && window.app && window.app.loadDownloads) {
                                 window.app.loadDownloads();
                             }
@@ -332,17 +331,25 @@ class UIManager {
                 });
             }
         }
-        
+
+        const moreBtn = row.querySelector('.action-more');
+        if (moreBtn) {
+            moreBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.openTrackMenu(track);
+            });
+        }
+
         return row;
     }
-    
+
     async renderTrackList(tracks, containerId, emptyMessage = "No tracks found.") {
         const isDownloadsView = (containerId === 'downloads-results');
         const container = document.getElementById(containerId);
         if (!container) return;
-        
+
         container.innerHTML = '';
-        
+
         if (!tracks || tracks.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
@@ -353,15 +360,15 @@ class UIManager {
             if (window.lucide) lucide.createIcons();
             return;
         }
-        
+
         for (let i = 0; i < tracks.length; i++) {
             const row = await this.createTrackRow(tracks[i], tracks, i, isDownloadsView);
             container.appendChild(row);
         }
-        
+
         if (window.lucide) lucide.createIcons();
     }
-    
+
     // Create card for grid (Home Page)
     createGridCard(track, queueList, index) {
         const lastPlayedId = window.player ? window.player.getLastPlayedTrackId() : (localStorage.getItem('mpt_last_played_track') || null);
@@ -369,11 +376,12 @@ class UIManager {
         const card = document.createElement('div');
         card.className = 'track-card' + (lastPlayedId && track.id === lastPlayedId ? ' last-played-highlight' : '');
         card.dataset.id = track.id;
-        
-        const artworkHtml = track.thumbnail ? 
-            `<img src="${track.thumbnail}" class="grid-artwork" loading="lazy">` : 
-            `<div class="grid-artwork placeholder"><i data-lucide="music"></i></div>`;
-            
+
+        const artworkUrl = (typeof window.getReliableArtwork === 'function')
+            ? window.getReliableArtwork(track)
+            : (track.thumbnail || '/assets/covers/default.svg');
+        const artworkHtml = `<img src="${artworkUrl}" class="grid-artwork" loading="lazy" onerror="this.src='/assets/covers/default.svg';">`;
+
         card.innerHTML = `
             ${artworkHtml}
             <div class="grid-details">
@@ -382,22 +390,22 @@ class UIManager {
                 <div class="grid-duration track-duration" style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 4px;">${this.formatDuration(track.duration)}</div>
             </div>
         `;
-        
+
         card.addEventListener('click', () => {
             console.log("[UI] PLAY TRACK");
             if (window.player) {
                 window.player.playTrack(track, queueList, index);
             }
         });
-        
+
         const durationSpan = card.querySelector('.grid-duration');
         if (!track.duration) {
             this.loadTrackMetadata(track, durationSpan);
         }
-        
+
         return card;
     }
-    
+
     renderHorizontalGrid(tracks, containerId) {
         const container = document.getElementById(containerId);
         if (!container) return;
@@ -409,6 +417,90 @@ class UIManager {
         });
 
         if (window.lucide) lucide.createIcons();
+    }
+
+    openTrackMenu(track) {
+        this.selectedMenuTrack = track;
+        const modal = document.getElementById('modal-track-menu');
+        const titleEl = document.getElementById('context-menu-title');
+        const artistEl = document.getElementById('context-menu-artist');
+        const artworkEl = document.getElementById('context-menu-artwork');
+        const favLabel = document.getElementById('ctx-fav-label');
+        const dlLabel = document.getElementById('ctx-dl-label');
+
+        if (!modal) return;
+
+        if (titleEl) titleEl.textContent = track.title || 'Unknown Track';
+        if (artistEl) artistEl.textContent = track.artist || '-';
+        if (artworkEl) {
+            const art = (typeof window.getReliableArtwork === 'function')
+                ? window.getReliableArtwork(track)
+                : (track.thumbnail || '/assets/covers/default.svg');
+            artworkEl.src = art;
+        }
+
+        const isFav = window.storageManager?.isFavorite(track.id);
+        if (favLabel) favLabel.textContent = isFav ? 'Remove Favorite' : 'Add to Favorites';
+
+        modal.style.display = 'block';
+        if (window.lucide) lucide.createIcons({ root: modal });
+    }
+
+    closeTrackMenu() {
+        const modal = document.getElementById('modal-track-menu');
+        if (modal) modal.style.display = 'none';
+        this.selectedMenuTrack = null;
+    }
+
+    setupTrackMenuListeners() {
+        const playNextBtn = document.getElementById('ctx-play-next');
+        if (playNextBtn) {
+            playNextBtn.addEventListener('click', () => {
+                if (this.selectedMenuTrack && window.player) {
+                    window.player.playNextTrack(this.selectedMenuTrack);
+                }
+                this.closeTrackMenu();
+            });
+        }
+
+        const addQueueBtn = document.getElementById('ctx-add-queue');
+        if (addQueueBtn) {
+            addQueueBtn.addEventListener('click', () => {
+                if (this.selectedMenuTrack && window.player) {
+                    window.player.addToQueue(this.selectedMenuTrack);
+                }
+                this.closeTrackMenu();
+            });
+        }
+
+        const favBtn = document.getElementById('ctx-favorite');
+        if (favBtn) {
+            favBtn.addEventListener('click', () => {
+                if (this.selectedMenuTrack && window.storageManager) {
+                    const added = window.storageManager.toggleFavorite(this.selectedMenuTrack);
+                    window.uiManager.showNotification(added ? "Added to Favorites" : "Removed from Favorites", "success");
+                    if (document.getElementById('page-favorites')?.classList.contains('active') && window.app?.loadFavorites) {
+                        window.app.loadFavorites();
+                    }
+                }
+                this.closeTrackMenu();
+            });
+        }
+
+        const dlBtn = document.getElementById('ctx-download');
+        if (dlBtn) {
+            dlBtn.addEventListener('click', async () => {
+                if (this.selectedMenuTrack && window.OfflineManager) {
+                    try {
+                        await window.OfflineManager.downloadTrack(this.selectedMenuTrack);
+                        window.uiManager.showNotification(`Downloaded ${this.selectedMenuTrack.title}`, 'success');
+                    } catch (e) {
+                        window.uiManager.showNotification(`Download error: ${e.message}`, 'error');
+                    }
+                }
+                this.closeTrackMenu();
+            });
+        }
     }
 }
 

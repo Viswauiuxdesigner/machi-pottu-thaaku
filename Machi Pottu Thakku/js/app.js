@@ -25,7 +25,7 @@ export function getTrackCollection(track) {
 class App {
     constructor() {
         console.log("[RUNTIME] Local Music Library version loaded");
-        
+
         this.currentSearchQuery = '';
         this.currentSearchResults = [];
         this.musicLibrary = [];
@@ -89,10 +89,10 @@ class App {
 
         // Setup Downloads Sort Dropdown
         this.setupDownloadsSort();
-        
+
         // Dynamic Greeting
         this.updateGreeting();
-        
+
         // Explore Button
         const btnExplore = document.getElementById('btn-explore');
         if (btnExplore) {
@@ -108,7 +108,7 @@ class App {
 
         // Setup Search
         this.setupSearch();
-        
+
         // Setup Network Listeners
         window.addEventListener('online', () => {
             this.updateNetworkStatus(true);
@@ -116,13 +116,13 @@ class App {
         });
         window.addEventListener('offline', () => this.updateNetworkStatus(false));
         this.updateNetworkStatus(navigator.onLine);
-        
+
         // Setup Load More Button (Hidden for local library as search is instant/unlimited)
         const btnLoadMoreContainer = document.getElementById('load-more-container');
         if (btnLoadMoreContainer) {
             btnLoadMoreContainer.style.display = 'none';
         }
-        
+
         // Setup Refresh Button
         const btnRefresh = document.getElementById('btn-refresh-library');
         if (btnRefresh) {
@@ -137,7 +137,7 @@ class App {
                 }
             });
         }
-        
+
         // Load initial data from cache immediately (doesn't block UI)
         this.loadHomeData();
 
@@ -172,11 +172,11 @@ class App {
 
             if (!response.ok) throw new Error('Failed to load music library from serverless function');
             const data = await response.json();
-            
+
             if (data.error) throw new Error(data.error);
 
             this.musicLibrary = data.songs || [];
-            
+
             // Persist to both localStorage and sessionStorage
             const cachePayload = JSON.stringify({
                 timestamp: Date.now(),
@@ -188,7 +188,7 @@ class App {
             try {
                 sessionStorage.setItem('mpt_filebase_library', cachePayload);
             } catch (e) {}
-            
+
             console.log(`[FILEBASE LIBRARY] Loaded ${this.musicLibrary.length} songs from server`);
 
             // Refresh Home screen if currently visible
@@ -199,7 +199,7 @@ class App {
         } catch (error) {
             clearTimeout(timeoutId);
             console.warn('[FILEBASE LIBRARY] Notice:', error.message || error);
-            
+
             // If offline, silently preserve existing cache
             if (!navigator.onLine || error.name === 'AbortError') {
                 console.log("[FILEBASE LIBRARY] Offline mode active; preserved cached library.");
@@ -231,7 +231,7 @@ class App {
     updateGreeting() {
         const hour = new Date().getHours();
         let greeting = "Good evening";
-        
+
         if (hour >= 5 && hour < 12) {
             greeting = "Good morning";
         } else if (hour >= 12 && hour < 17) {
@@ -241,17 +241,17 @@ class App {
         } else {
             greeting = "Good night";
         }
-        
+
         const greetingEl = document.getElementById('header-greeting');
         if (greetingEl) {
             greetingEl.textContent = `${greeting}, Machi 👋`;
         }
     }
-    
+
     updateNetworkStatus(isOnline) {
         const el = document.getElementById('network-status');
         if (!el) return;
-        
+
         if (isOnline) {
             el.className = 'network-status online';
             el.innerHTML = '<span class="status-dot"></span> <span class="status-text">Online</span>';
@@ -277,9 +277,14 @@ class App {
                         CapApp.exitApp();
                     }
                 });
+                CapApp.addListener('appStateChange', (state) => {
+                    if (state && state.isActive && window.player && typeof window.player.syncFromNative === 'function') {
+                        window.player.syncFromNative();
+                    }
+                });
                 listenerAdded = true;
             } catch (e) {
-                console.warn('[BACK] Error adding Capacitor App backButton listener:', e);
+                console.warn('[BACK] Error adding Capacitor App listeners:', e);
             }
         }
 
@@ -302,7 +307,7 @@ class App {
         if (searchInput) searchInput.value = '';
         this.currentSearchQuery = '';
         this.currentSearchResults = [];
-        
+
         // Hide collection header if present
         const collectionHeader = document.getElementById('collection-header');
         if (collectionHeader) {
@@ -328,10 +333,10 @@ class App {
 
     setupSearch() {
         const searchInput = document.getElementById('search-input');
-        
+
         searchInput.addEventListener('input', (e) => {
             const query = e.target.value.trim();
-            
+
             // Hide collection header when actively searching
             const collectionHeader = document.getElementById('collection-header');
             if (collectionHeader) {
@@ -348,7 +353,7 @@ class App {
                 if (window.lucide) lucide.createIcons();
                 return;
             }
-            
+
             this.performSearch(query);
         });
 
@@ -358,7 +363,7 @@ class App {
                 const query = e.target.textContent;
                 searchInput.value = query;
                 searchInput.dispatchEvent(new Event('input'));
-                
+
                 // Highlight active chip
                 document.querySelectorAll('.search-chip').forEach(c => c.classList.remove('active'));
                 e.target.classList.add('active');
@@ -370,9 +375,9 @@ class App {
         console.log(`[SEARCH] query: ${query}`);
         console.log("[FILEBASE LIBRARY] Search source: dynamically loaded serverless library");
         this.currentSearchQuery = query;
-        
+
         const lowercaseQuery = query.toLowerCase();
-        
+
         this.currentSearchResults = this.musicLibrary.filter(song => {
             return (
                 (song.title && song.title.toLowerCase().includes(lowercaseQuery)) ||
@@ -382,10 +387,10 @@ class App {
                 (song.year && song.year.toString().includes(lowercaseQuery))
             );
         });
-        
+
         console.log(`[SEARCH] matched: ${this.currentSearchResults.length} tracks`);
         window.uiManager.renderTrackList(this.currentSearchResults, 'search-results', "No results found for '" + query + "'");
-        
+
         const btnLoadMoreContainer = document.getElementById('load-more-container');
         if (btnLoadMoreContainer) {
             btnLoadMoreContainer.style.display = 'none'; // No pagination needed
@@ -534,49 +539,50 @@ class App {
     loadHomeData() {
         const container = document.getElementById('collections-grid');
         if (!container) return;
-        
+
         container.innerHTML = '';
-        
+
         const folderMap = new Map();
-        
+
         this.musicLibrary.forEach(song => {
             const parts = (song.s3Key || "").split('/');
             // Tracks at the root directory will have songFolder = ""
             const songFolder = parts.length > 1 ? parts[parts.length - 2] : "";
-            
+
             if (!folderMap.has(songFolder)) {
                 folderMap.set(songFolder, []);
             }
             folderMap.get(songFolder).push(song);
         });
-        
+
         for (const [folder, tracks] of folderMap.entries()) {
             if (tracks.length === 0) continue;
-            
+
             const title = folder === "" ? "Recently Added" : folder;
             const id = folder === "" ? "recently-added" : folder.toLowerCase().replace(/[^a-z0-9]/g, '-');
-            
-            const trackWithThumb = tracks.find(t => t.thumbnail);
-            const thumbnail = trackWithThumb ? trackWithThumb.thumbnail : `https://picsum.photos/seed/${title.replace(/ /g, '')}/500/500`;
-            
+
+            const thumbnail = (typeof window.getCollectionCover === 'function')
+                ? window.getCollectionCover(title, tracks)
+                : (tracks.find(t => t.thumbnail)?.thumbnail || '/assets/covers/default.svg');
+
             console.log(`[HOME] Rendering collection: ${title} with ${tracks.length} tracks`);
-            
+
             const card = document.createElement('div');
             card.className = 'collection-card grid-card';
             card.dataset.id = id;
-            
+
             card.innerHTML = `
-                <img src="${thumbnail}" class="grid-artwork" loading="lazy" alt="${title}">
+                <img src="${thumbnail}" class="grid-artwork" loading="lazy" alt="${title}" onerror="this.src='/assets/covers/default.svg'">
                 <div class="grid-details">
                     <div class="grid-title">${title}</div>
                     <div class="grid-artist" style="color: var(--secondary-text); font-size: 13px;">${tracks.length} songs</div>
                 </div>
             `;
-            
+
             card.addEventListener('click', () => {
                 this.openCollection(title, tracks);
             });
-            
+
             container.appendChild(card);
         }
 
@@ -605,9 +611,10 @@ class App {
         const { folder, name: collectionName } = getTrackCollection(track);
         container.style.display = 'block';
 
-        const artworkHtml = track.thumbnail
-            ? `<img src="${track.thumbnail}" class="last-played-artwork" loading="lazy" alt="${track.title}">`
-            : `<div class="last-played-artwork placeholder"><i data-lucide="music"></i></div>`;
+        const artworkUrl = (typeof window.getReliableArtwork === 'function')
+            ? window.getReliableArtwork(track)
+            : (track.thumbnail || '/assets/covers/default.svg');
+        const artworkHtml = `<img src="${artworkUrl}" class="last-played-artwork" loading="lazy" alt="${track.title}" onerror="this.src='/assets/covers/default.svg';">`;
 
         container.innerHTML = `
             <div class="section-header" style="margin-bottom: var(--spacing-2);">
@@ -683,11 +690,11 @@ class App {
         });
         window.uiManager.renderTrackList(tracks, 'favorites-results', "You haven't favorited any tracks yet.");
     }
-    
+
     setupDownloadsSort() {
         const sortBtn = document.getElementById('downloads-sort-btn');
         const sortMenu = document.getElementById('downloads-sort-menu');
-        
+
         if (sortBtn && sortMenu) {
             sortBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -736,7 +743,7 @@ class App {
     loadDownloads() {
         if (!window.OfflineManager) return;
         const tracks = window.OfflineManager.getOfflineTracks() || [];
-        
+
         const countEl = document.getElementById('downloads-count');
         if (countEl) {
             countEl.textContent = `Downloaded Songs (${tracks.length})`;

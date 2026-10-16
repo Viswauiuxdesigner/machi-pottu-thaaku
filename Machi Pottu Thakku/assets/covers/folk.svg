@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#381503" />
+      <stop offset="50%" stop-color="#230c02" />
+      <stop offset="100%" stop-color="#120500" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f7971e" />
+      <stop offset="100%" stop-color="#ffd200" />
+    </linearGradient>
+  </defs>
+  <rect width="500" height="500" fill="url(#bg)" />
+  <circle cx="250" cy="210" r="110" fill="none" stroke="rgba(255,210,0,0.15)" stroke-width="3" stroke-dasharray="10 8" />
+  <!-- Traditional percussion / drum icon -->
+  <ellipse cx="250" cy="180" rx="80" ry="25" fill="none" stroke="url(#accent)" stroke-width="10" />
+  <path d="M170 180 V240 C170 270 210 280 250 280 C290 280 330 270 330 240 V180" fill="none" stroke="url(#accent)" stroke-width="10" />
+  <line x1="190" y1="195" x2="230" y2="265" stroke="rgba(255,255,255,0.4)" stroke-width="4" />
+  <line x1="310" y1="195" x2="270" y2="265" stroke="rgba(255,255,255,0.4)" stroke-width="4" />
+  <text x="250" y="370" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="24" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="2">TAMIL FOLK &amp; KUTHU</text>
+  <text x="250" y="405" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="14" font-weight="600" fill="#ffd200" text-anchor="middle" letter-spacing="3">HIGH VOLTAGE BEATS</text>
+</svg>
