@@ -23,6 +23,7 @@ public class AudioPlayerService extends MediaSessionService {
 
     private static final String TAG = "AudioPlayerService";
     public static final String PLAYBACK_CHANNEL_ID = "playback_channel";
+    private MediaSession mediaSession = null;
     private static AudioPlayerService instance = null;
     private AudioEffectsManager audioEffectsManager = null;
 
