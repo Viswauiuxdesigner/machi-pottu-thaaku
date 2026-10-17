@@ -20,6 +20,9 @@
 
     <!-- Icons -->
     <script src="/js/vendor/lucide.min.js"></script>
+
+    <!-- WebRTC PeerJS -->
+    <script src="/js/vendor/peerjs.min.js"></script>
 </head>
 
 <body>
@@ -234,8 +237,14 @@
                 <button class="icon-btn" onclick="document.getElementById('page-now-playing').classList.remove('active')">
                     <i data-lucide="chevron-down" style="color: var(--accent-color);"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></i>
                 </button>
-                <div class="np-header-title" style="color: var(--accent-color); font-weight: 600;">Now Playing</div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div class="np-header-title" style="color: var(--accent-color); font-weight: 600;">Now Playing</div>
+                    <span id="np-sync-badge" class="np-sync-badge" style="display: none;"></span>
+                </div>
                 <div style="display: flex; gap: 8px; align-items: center;">
+                    <button class="icon-btn" id="np-btn-sync" title="Listen Together" aria-label="Listen Together">
+                        <i data-lucide="users" style="width: 22px; height: 22px; color: var(--secondary-text);"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg></i>
+                    </button>
                     <button class="icon-btn" id="np-btn-spatial" title="360° Spatial Audio" aria-label="360° Spatial Audio">
                         <i data-lucide="radio" style="width: 22px; height: 22px; color: var(--secondary-text);"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path></svg></i>
                     </button>
@@ -502,6 +511,93 @@
             </div>
         </div>
 
+        <!-- Listen Together Drawer -->
+        <div id="drawer-sync" class="bottom-drawer" aria-hidden="true">
+            <div class="drawer-backdrop" onclick="window.syncManager.closeSyncDrawer()"></div>
+            <div class="drawer-content">
+                <div class="drawer-header">
+                    <div class="drawer-title-group">
+                        <div class="drawer-title"><i data-lucide="users" style="width: 20px; height: 20px; margin-right: 8px; color: var(--accent-color);"></i> Listen Together</div>
+                        <div class="drawer-subtitle" id="sync-status-label">Co-listen in real-time with a friend</div>
+                    </div>
+                    <button class="icon-btn" onclick="window.syncManager.closeSyncDrawer()" aria-label="Close Listen Together">
+                        <i data-lucide="x" style="width: 20px; height: 20px; color: var(--secondary-text);"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></i>
+                    </button>
+                </div>
+                <div class="drawer-body">
+                    <!-- Transport Mode Selector -->
+                    <div class="sync-transport-selector">
+                        <button id="sync-mode-internet" class="sync-mode-tab active">
+                            <i data-lucide="globe" style="width: 14px; height: 14px; margin-right: 4px;"></i> Internet P2P
+                        </button>
+                        <button id="sync-mode-local" class="sync-mode-tab">
+                            <i data-lucide="wifi" style="width: 14px; height: 14px; margin-right: 4px;"></i> Local Wi-Fi (Coming Soon)
+                        </button>
+                    </div>
+
+                    <!-- NOT IN ROOM SECTION -->
+                    <div id="sync-not-in-room-section" class="sync-card">
+                        <div class="sync-action-block">
+                            <div class="sync-action-title">Start a Listening Session</div>
+                            <p class="sync-action-desc">Create a room code to share with a friend and control playback synchronously.</p>
+                            <button id="sync-btn-create-room" class="sync-primary-btn">
+                                <i data-lucide="plus-circle" style="width: 18px; height: 18px; margin-right: 8px;"></i> Create Room
+                            </button>
+                        </div>
+
+                        <div class="sync-divider"><span>OR JOIN WITH CODE</span></div>
+
+                        <div class="sync-action-block">
+                            <div class="sync-input-row">
+                                <input type="text" id="sync-input-room-code" class="sync-code-input" placeholder="6-digit code" maxlength="6" autocomplete="off" spellcheck="false">
+                                <button id="sync-btn-join-room" class="sync-secondary-btn">Join</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- IN ROOM ACTIVE SECTION -->
+                    <div id="sync-in-room-section" class="sync-card" style="display: none;">
+                        <div class="sync-room-header">
+                            <div class="sync-room-code-container">
+                                <span class="sync-room-label">ROOM CODE</span>
+                                <div class="sync-room-code-display" id="sync-display-room-code">------</div>
+                                <button id="sync-btn-copy-code" class="sync-copy-btn" title="Copy Room Code">
+                                    <i data-lucide="copy" style="width: 16px; height: 16px;"></i> Copy
+                                </button>
+                            </div>
+                            <div id="sync-role-badge" class="sync-role-badge host">HOST</div>
+                        </div>
+
+                        <div class="sync-status-row">
+                            <div id="sync-status-pill" class="sync-status-pill status-green">In Sync</div>
+                        </div>
+
+                        <!-- Live Timing & Drift Metrics -->
+                        <div class="sync-metrics-grid">
+                            <div class="sync-metric-item">
+                                <span class="sync-metric-label">RTT Latency</span>
+                                <span class="sync-metric-value" id="sync-stat-rtt">0 ms</span>
+                            </div>
+                            <div class="sync-metric-item">
+                                <span class="sync-metric-label">Clock Offset</span>
+                                <span class="sync-metric-value" id="sync-stat-offset">0 ms</span>
+                            </div>
+                            <div class="sync-metric-item">
+                                <span class="sync-metric-label">Drift</span>
+                                <span class="sync-metric-value" id="sync-stat-drift">0 ms</span>
+                            </div>
+                        </div>
+
+                        <div class="sync-footer-actions">
+                            <button id="sync-btn-leave-room" class="sync-leave-btn">
+                                <i data-lucide="log-out" style="width: 16px; height: 16px; margin-right: 6px;"></i> Leave Room
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Track Context Menu Modal -->
         <div id="modal-track-menu" class="context-modal" style="display: none;">
             <div class="modal-backdrop" onclick="window.uiManager.closeTrackMenu()"></div>
@@ -583,6 +679,7 @@
     <script type="module" src="/js/offline-manager.js"></script>
     <script type="module" src="/js/artwork.js"></script>
     <script type="module" src="/js/player.js"></script>
+    <script type="module" src="/js/sync-manager.js"></script>
     <script type="module" src="/js/ui.js"></script>
     <script type="module" src="/js/app.js"></script>
     <script type="module" src="/js/machi-guess.js"></script>

@@ -183,16 +183,31 @@ class AudioPlayer {
 
                 const duration = dragDuration > 0 ? dragDuration : this.getTrackDuration();
                 if (duration > 0) {
-                    const clampedRatio = Math.max(0, Math.min(1, seekRatio));
-                    const targetTime = Math.round(clampedRatio * duration);
-                    if (Capacitor.isNativePlatform() && this.nativeInitialized) {
-                        try {
-                            await NativeAudio.seek({ audioId: 'main', timeInSeconds: targetTime });
-                        } catch(err) {
-                            console.error("Native seek error", err);
+                    if (window.syncManager?.isReceiver()) {
+                        if (window.uiManager?.showNotification) {
+                            window.uiManager.showNotification("Host controls seeking in Listen Together.", "info");
                         }
-                    } else if (this.audio) {
-                        this.audio.currentTime = targetTime;
+                    } else {
+                        const clampedRatio = Math.max(0, Math.min(1, seekRatio));
+                        const targetTime = Math.round(clampedRatio * duration);
+                        let isCurrentlyPlaying = false;
+
+                        if (Capacitor.isNativePlatform() && this.nativeInitialized) {
+                            try {
+                                const status = await NativeAudio.isPlaying({ audioId: 'main' });
+                                isCurrentlyPlaying = Boolean(status.isPlaying);
+                                await NativeAudio.seek({ audioId: 'main', timeInSeconds: targetTime });
+                            } catch(err) {
+                                console.error("Native seek error", err);
+                            }
+                        } else if (this.audio) {
+                            isCurrentlyPlaying = !this.audio.paused;
+                            this.audio.currentTime = targetTime;
+                        }
+
+                        if (window.syncManager?.isHost()) {
+                            window.syncManager.broadcastSeek(targetTime, isCurrentlyPlaying);
+                        }
                     }
                 }
 
@@ -350,6 +365,13 @@ class AudioPlayer {
     }
 
     async seekFromClick(e, container) {
+        if (window.syncManager?.isReceiver()) {
+            if (window.uiManager?.showNotification) {
+                window.uiManager.showNotification("Host controls seeking in Listen Together.", "info");
+            }
+            return;
+        }
+
         const duration = this.getTrackDuration();
         if (!duration || isNaN(duration) || duration <= 0) return;
 
@@ -357,15 +379,23 @@ class AudioPlayer {
         if (!rect.width) return;
         const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
         const targetTime = Math.round(pos * duration);
+        let isCurrentlyPlaying = false;
 
         if (Capacitor.isNativePlatform() && this.nativeInitialized) {
             try {
+                const status = await NativeAudio.isPlaying({ audioId: 'main' });
+                isCurrentlyPlaying = Boolean(status.isPlaying);
                 await NativeAudio.seek({ audioId: 'main', timeInSeconds: targetTime });
             } catch(err) {
                 console.error("Native seek error", err);
             }
         } else if (this.audio) {
+            isCurrentlyPlaying = !this.audio.paused;
             this.audio.currentTime = targetTime;
+        }
+
+        if (window.syncManager?.isHost()) {
+            window.syncManager.broadcastSeek(targetTime, isCurrentlyPlaying);
         }
     }
 
@@ -585,7 +615,98 @@ class AudioPlayer {
         };
     }
 
-    async playTrack(track, queueList = [], index = 0) {
+    async loadSyncTrack(track) {
+        if (!track?.s3Key && track?.id) {
+            let canonical = null;
+            if (window.app?.musicLibrary && window.app.musicLibrary.length > 0) {
+                canonical = window.app.musicLibrary.find(t => String(t.id) === String(track.id));
+            }
+            if (!canonical && window.OfflineManager && typeof window.OfflineManager.getLocalTrack === 'function') {
+                canonical = window.OfflineManager.getLocalTrack(track.id);
+            }
+            if (canonical && canonical.s3Key) {
+                track = { ...canonical, ...track, s3Key: canonical.s3Key };
+            }
+        }
+
+        if (!track?.s3Key) {
+            console.error("[SYNC] Missing s3Key for track", track);
+            return false;
+        }
+
+        this.currentTrack = track;
+        this.trackLoadTime = Date.now();
+        this.playRequestId++;
+        this.playbackGeneration++;
+        this.hasPlaybackError = false;
+
+        const finalUrl = await this.resolveTrackPlayableUrl(track);
+        if (!finalUrl) {
+            console.error("[SYNC] Could not resolve playable URL for track", track);
+            return false;
+        }
+
+        this.updateUI();
+
+        if (Capacitor.isNativePlatform()) {
+            const nativeItem = this.buildNativeQueueItem(track, finalUrl);
+            if (!this.nativeInitialized) {
+                const res = await NativeAudio.create({
+                    audioId: 'main',
+                    audioSource: finalUrl,
+                    trackId: String(track.id),
+                    friendlyTitle: track.title,
+                    artistName: track.artist,
+                    artworkSource: (track.thumbnail && typeof track.thumbnail === 'string' && track.thumbnail.startsWith('http')) ? track.thumbnail : '',
+                    useForNotification: true
+                });
+                if (res && res.success === false) throw new Error("Failed to create NativeAudio");
+                this.nativeInitialized = true;
+                this.currentNativeSource = finalUrl;
+                this.currentNativeTrackId = String(track.id);
+
+                if (!this.nativeCallbacksRegistered) {
+                    NativeAudio.onPlaybackStatusChange({ audioId: 'main' }, (result) => {
+                        if (result.status === 'playing') this.syncUIState(true);
+                        else if (result.status === 'paused' || result.status === 'stopped' || result.status === 'error') this.syncUIState(false);
+                    });
+                    NativeAudio.onAudioEnd({ audioId: 'main' }, () => this.handleTrackEnded());
+                    NativeAudio.onAudioReady({ audioId: 'main' }, () => { this.nativeReady = true; });
+                    this.nativeCallbacksRegistered = true;
+                }
+                await NativeAudio.initialize({ audioId: 'main' });
+            }
+
+            // Set single item queue for receiver sync
+            await NativeAudio.setQueue({
+                audioId: 'main',
+                items: [nativeItem],
+                startIndex: 0,
+                endpoint: typeof window.getApiUrl === 'function' ? window.getApiUrl('/.netlify/functions/music-play') : 'https://starlit-sable-83184f.netlify.app/.netlify/functions/music-play'
+            });
+
+            await NativeAudio.pause({ audioId: 'main' });
+            await NativeAudio.seek({ audioId: 'main', timeInSeconds: 0 });
+            this.currentNativeSource = finalUrl;
+            this.currentNativeTrackId = String(track.id);
+            this.saveLastPlayedTrack(track);
+
+            this.applyNativeAudioEq().catch(() => {});
+            this.applyNativeSpatialAudio().catch(() => {});
+        } else if (this.audio) {
+            this.audio.src = finalUrl;
+            this.audio.pause();
+            this.audio.currentTime = 0;
+            this.saveLastPlayedTrack(track);
+            this.applyWebAudioEq();
+            this.applyWebAudioSpatial();
+        }
+
+        this.syncUIState(false);
+        return true;
+    }
+
+    async playTrack(track, queueList = [], index = 0, isSync = false) {
         if (this.isDemoRunning) {
             this.stop3DMotorcycleDemo();
             this.wasPlayingBeforeDemo = false;
@@ -612,6 +733,13 @@ class AudioPlayer {
             console.error("[FILEBASE PLAYBACK] Missing s3Key", track);
             window.uiManager.showNotification("Unable to play this song. File key is missing.", "error");
             this.isTransitioning = false;
+            return false;
+        }
+
+        if (window.syncManager?.isReceiver() && !isSync) {
+            if (window.uiManager?.showNotification) {
+                window.uiManager.showNotification("Host is controlling playback in Listen Together.", "info");
+            }
             return false;
         }
 
@@ -784,6 +912,20 @@ class AudioPlayer {
 
                 if (currentReqId !== this.playRequestId) return false; // Stale request
 
+                if (window.syncManager?.isHost()) {
+                    await NativeAudio.pause({ audioId: 'main' });
+                    await NativeAudio.seek({ audioId: 'main', timeInSeconds: 0 });
+                    this.currentNativeSource = finalUrl;
+                    this.currentNativeTrackId = String(track.id);
+                    this.saveLastPlayedTrack(track);
+                    this.maintainNativeQueue();
+                    this.applyNativeAudioEq().catch(() => {});
+                    this.applyNativeSpatialAudio().catch(() => {});
+                    this.syncUIState(false);
+                    window.syncManager.broadcastTrackChange(track, this.queueIndex);
+                    return true;
+                }
+
                 console.log("[NATIVE AUDIO] play");
                 await NativeAudio.play({ audioId: 'main' });
                 this.currentNativeSource = finalUrl;
@@ -798,6 +940,16 @@ class AudioPlayer {
                 this.applyNativeSpatialAudio().catch(() => {});
             } else {
                 this.audio.src = finalUrl;
+                if (window.syncManager?.isHost()) {
+                    this.audio.pause();
+                    this.audio.currentTime = 0;
+                    this.saveLastPlayedTrack(track);
+                    this.applyWebAudioEq();
+                    this.applyWebAudioSpatial();
+                    this.syncUIState(false);
+                    window.syncManager.broadcastTrackChange(track, this.queueIndex);
+                    return true;
+                }
                 await this.audio.play();
                 this.saveLastPlayedTrack(track);
                 this.applyWebAudioEq();
@@ -833,6 +985,13 @@ class AudioPlayer {
 
         if (!this.currentTrack) return;
 
+        if (window.syncManager?.isReceiver()) {
+            if (window.uiManager?.showNotification) {
+                window.uiManager.showNotification("Host is controlling playback in Listen Together.", "info");
+            }
+            return;
+        }
+
         console.log("[MPT_DIAG] togglePlay clicked for track ID:", this.currentTrack.id);
 
         if (Capacitor.isNativePlatform()) {
@@ -843,13 +1002,26 @@ class AudioPlayer {
                 return;
             }
 
-            NativeAudio.isPlaying({ audioId: 'main' }).then(({ isPlaying }) => {
+            NativeAudio.isPlaying({ audioId: 'main' }).then(async ({ isPlaying }) => {
+                let currentPos = 0;
+                try {
+                    const timeRes = await NativeAudio.getCurrentTime({ audioId: 'main' });
+                    currentPos = timeRes.currentTime || 0;
+                } catch(e) {}
+
                 if (isPlaying) {
                     NativeAudio.pause({ audioId: 'main' });
                     this.syncUIState(false);
+                    if (window.syncManager?.isHost()) {
+                        window.syncManager.broadcastPause(currentPos);
+                    }
                 } else {
-                    NativeAudio.play({ audioId: 'main' });
-                    this.syncUIState(true);
+                    if (window.syncManager?.isHost()) {
+                        window.syncManager.broadcastScheduledPlay(currentPos);
+                    } else {
+                        NativeAudio.play({ audioId: 'main' });
+                        this.syncUIState(true);
+                    }
                 }
             }).catch(e => {
                 console.error("[MPT_DIAG] togglePlay isPlaying check error:", e);
@@ -861,14 +1033,26 @@ class AudioPlayer {
                 return;
             }
             if (this.audio.paused) {
-                this.audio.play();
+                if (window.syncManager?.isHost()) {
+                    window.syncManager.broadcastScheduledPlay(this.audio.currentTime || 0);
+                } else {
+                    this.audio.play();
+                }
             } else {
                 this.audio.pause();
+                if (window.syncManager?.isHost()) {
+                    window.syncManager.broadcastPause(this.audio.currentTime || 0);
+                }
             }
         }
     }
 
     handleTrackEnded() {
+        if (window.syncManager?.isReceiver()) {
+            console.log("[LISTEN_TOGETHER] Receiver waiting for host track ended directive");
+            return;
+        }
+
         const now = Date.now();
 
         // Prevent duplicate events within 1 second of each other
@@ -894,6 +1078,10 @@ class AudioPlayer {
         // Handle Repeat One
         if (this.repeatMode === 'one' && this.currentTrack) {
             console.log("[MPT_DIAG] Repeat One active, restarting current track from 0");
+            if (window.syncManager?.isHost()) {
+                window.syncManager.broadcastScheduledPlay(0);
+                return;
+            }
             if (Capacitor.isNativePlatform() && this.nativeInitialized) {
                 NativeAudio.seek({ audioId: 'main', timeInSeconds: 0 }).then(() => {
                     NativeAudio.play({ audioId: 'main' });
@@ -1000,6 +1188,13 @@ class AudioPlayer {
     }
 
     playNext() {
+        if (window.syncManager?.isReceiver()) {
+            if (window.uiManager?.showNotification) {
+                window.uiManager.showNotification("Host controls track skipping in Listen Together.", "info");
+            }
+            return;
+        }
+
         if (this.isTransitioning) {
             console.log("[MPT_DIAG] playNext ignored: transition already in progress");
             return;
@@ -1070,6 +1265,13 @@ class AudioPlayer {
     }
 
     async playPrev() {
+        if (window.syncManager?.isReceiver()) {
+            if (window.uiManager?.showNotification) {
+                window.uiManager.showNotification("Host controls track skipping in Listen Together.", "info");
+            }
+            return;
+        }
+
         if (this.isTransitioning) {
             console.log("[MPT_DIAG] playPrev ignored: transition already in progress");
             return;
@@ -2378,6 +2580,18 @@ class AudioPlayer {
         const drawer = document.getElementById('drawer-spatial');
         if (drawer) {
             drawer.classList.remove('active');
+        }
+    }
+
+    openSyncDrawer() {
+        if (window.syncManager) {
+            window.syncManager.openSyncDrawer();
+        }
+    }
+
+    closeSyncDrawer() {
+        if (window.syncManager) {
+            window.syncManager.closeSyncDrawer();
         }
     }
 

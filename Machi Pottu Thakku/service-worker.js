@@ -4,6 +4,7 @@ const LOCAL_ASSETS_TO_CACHE = [
   '/index.html',
   '/manifest.webmanifest',
   '/js/vendor/lucide.min.js',
+  '/js/vendor/peerjs.min.js',
   '/assets/covers/default.svg',
   '/assets/covers/tamil-hits.svg',
   '/assets/covers/melody.svg',
