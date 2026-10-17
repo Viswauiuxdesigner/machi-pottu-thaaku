@@ -342,23 +342,36 @@ class AudioPlayer {
 
         const btnIcon = document.getElementById('btn-play-pause');
         if (btnIcon) {
-            btnIcon.innerHTML = `<i data-lucide="${isPlaying ? 'pause' : 'play'}" style="width: 24px; height: 24px; margin-left: ${isPlaying ? '0' : '2px'};" fill="currentColor"></i>`;
+            const playSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>';
+            const pauseSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="4" height="16" x="6" y="4"></rect><rect width="4" height="16" x="14" y="4"></rect></svg>';
+            btnIcon.innerHTML = `<i data-lucide="${isPlaying ? 'pause' : 'play'}" style="width: 24px; height: 24px; margin-left: ${isPlaying ? '0' : '2px'};" fill="currentColor">${isPlaying ? pauseSvg : playSvg}</i>`;
         }
 
         const npPlay = document.getElementById('np-play-pause');
         if (npPlay) {
-            npPlay.innerHTML = `<i data-lucide="${isPlaying ? 'pause' : 'play'}" style="width: 40px; height: 40px; fill: white; margin-left: ${isPlaying ? '0' : '4px'};"></i>`;
+            const npPlaySvg = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>';
+            const npPauseSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="4" height="16" x="6" y="4"></rect><rect width="4" height="16" x="14" y="4"></rect></svg>';
+            npPlay.innerHTML = `<i data-lucide="${isPlaying ? 'pause' : 'play'}" style="width: 40px; height: 40px; fill: white; margin-left: ${isPlaying ? '0' : '4px'};">${isPlaying ? npPauseSvg : npPlaySvg}</i>`;
+        }
+
+        const lpBtn = document.querySelector('.last-played-play-btn');
+        if (lpBtn) {
+            const lpPlaySvg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>';
+            const lpPauseSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="4" height="16" x="6" y="4"></rect><rect width="4" height="16" x="14" y="4"></rect></svg>';
+            lpBtn.innerHTML = `<i data-lucide="${isPlaying ? 'pause' : 'play'}" style="width: 20px; height: 20px; margin-left: ${isPlaying ? '0' : '2px'};" fill="currentColor">${isPlaying ? lpPauseSvg : lpPlaySvg}</i>`;
         }
 
         // Update row icons based on state
+        const rowPlaySvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>';
+        const rowPauseSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="4" height="16" x="6" y="4"></rect><rect width="4" height="16" x="14" y="4"></rect></svg>';
         document.querySelectorAll('.action-play').forEach(btn => {
-            const row = btn.closest('.track-row');
-            if (row && this.currentTrack && row.dataset.id === this.currentTrack.id) {
-                btn.innerHTML = `<i data-lucide="${isPlaying ? 'pause' : 'play'}"></i>`;
+            const row = btn.closest('.track-row') || btn.closest('.track-item');
+            if (row && this.currentTrack && String(row.dataset.id) === String(this.currentTrack.id)) {
+                btn.innerHTML = `<i data-lucide="${isPlaying ? 'pause' : 'play'}">${isPlaying ? rowPauseSvg : rowPlaySvg}</i>`;
                 if (isPlaying) btn.classList.add('active');
                 else btn.classList.remove('active');
             } else {
-                btn.innerHTML = `<i data-lucide="play"></i>`;
+                btn.innerHTML = `<i data-lucide="play">${rowPlaySvg}</i>`;
                 btn.classList.remove('active');
             }
         });
@@ -459,7 +472,16 @@ class AudioPlayer {
             }
         }
 
-        const artwork = (typeof window.getReliableArtwork === 'function') ? window.getReliableArtwork(track) : (track.thumbnail || '');
+        let nativeArtwork = '';
+        if (track.thumbnail && typeof track.thumbnail === 'string' && track.thumbnail.startsWith('http')) {
+            nativeArtwork = track.thumbnail;
+        } else if (typeof window.getReliableArtwork === 'function') {
+            const resolved = window.getReliableArtwork(track);
+            if (resolved && typeof resolved === 'string' && resolved.startsWith('http')) {
+                nativeArtwork = resolved;
+            }
+        }
+
         return {
             source: url || '',
             trackId: String(track.id),
@@ -467,7 +489,7 @@ class AudioPlayer {
             friendlyTitle: track.title || '',
             artistName: track.artist || '',
             albumTitle: track.album || '',
-            artworkSource: artwork,
+            artworkSource: nativeArtwork,
             s3Key: track.s3Key || '',
             urlFetchedAt: track._prefetchedAt || 0,
             isOffline: offline
@@ -609,7 +631,7 @@ class AudioPlayer {
                         trackId: String(track.id),
                         friendlyTitle: track.title,
                         artistName: track.artist,
-                        artworkSource: track.thumbnail || '',
+                        artworkSource: (track.thumbnail && typeof track.thumbnail === 'string' && track.thumbnail.startsWith('http')) ? track.thumbnail : '',
                         useForNotification: true
                     });
 

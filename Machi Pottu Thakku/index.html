@@ -33,17 +33,17 @@
 
             <nav class="main-nav">
                 <a href="#" class="nav-item active" data-page="home">
-                    <i data-lucide="home"></i> Home
+                    <i data-lucide="home"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg></i> Home
                 </a>
                 <a href="#" class="nav-item" data-page="search">
-                    <i data-lucide="search"></i> Search
+                    <i data-lucide="search"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg></i> Search
                 </a>
 
                 <a href="#" class="nav-item" data-page="downloads">
-                    <i data-lucide="download"></i> Downloads
+                    <i data-lucide="download"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></i> Downloads
                 </a>
                 <a href="#" class="nav-item" data-page="favorites">
-                    <i data-lucide="heart"></i> Favourites
+                    <i data-lucide="heart"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg></i> Favourites
                 </a>
             </nav>
         </aside>
@@ -70,11 +70,11 @@
                     </div>
                     <section class="quick-access">
                         <div class="quick-card card-downloads" onclick="document.querySelector('.nav-item[data-page=\'downloads\']').click()">
-                            <i data-lucide="download" class="quick-icon"></i>
+                            <i data-lucide="download" class="quick-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></i>
                             <div class="quick-title">Downloads</div>
                         </div>
                         <div class="quick-card card-favourites" onclick="document.querySelector('.nav-item[data-page=\'favorites\']').click()">
-                            <i data-lucide="heart" class="quick-icon"></i>
+                            <i data-lucide="heart" class="quick-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg></i>
                             <div class="quick-title">Favourites</div>
                         </div>
                     </section>
@@ -200,8 +200,8 @@
         <!-- Player -->
         <footer class="player" style="justify-content: space-between; padding: 0 var(--spacing-2);">
             <div class="player-track-info" style="width: auto; max-width: 50%; display: flex; align-items: center; cursor: pointer;" onclick="document.getElementById('page-now-playing').classList.add('active')">
-                <div class="player-artwork" id="player-artwork" style="width: 48px; height: 48px; margin-right: 12px; border-radius: var(--radius-sm); overflow: hidden;">
-                    <i data-lucide="music"></i>
+                <div class="player-artwork" id="player-artwork" style="width: 48px; height: 48px; margin-right: 12px; border-radius: var(--radius-sm); overflow: hidden; display: flex; align-items: center; justify-content: center;">
+                    <i data-lucide="music"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.6;"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg></i>
                 </div>
                 <div class="player-meta" style="overflow: hidden; max-width: calc(100vw - 200px);">
                     <div class="player-title" id="player-title" style="font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">No track playing</div>
@@ -211,9 +211,9 @@
 
             <div class="player-controls-container" style="flex: 1; max-width: 150px; flex-direction: row; justify-content: flex-end; align-items: center; margin-left: auto;">
                 <div class="player-controls" style="gap: 16px;">
-                    <button class="control-btn" id="btn-prev" aria-label="Previous"><i data-lucide="skip-back" style="width: 20px; height: 20px;"></i></button>
-                    <button class="control-btn play-btn" id="btn-play-pause" aria-label="Play" style="width: 44px; height: 44px; background: var(--accent-color); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center;"><i data-lucide="play" style="width: 24px; height: 24px; margin-left: 2px;" fill="currentColor"></i></button>
-                    <button class="control-btn" id="btn-next" aria-label="Next"><i data-lucide="skip-forward" style="width: 20px; height: 20px;"></i></button>
+                    <button class="control-btn" id="btn-prev" aria-label="Previous"><i data-lucide="skip-back" style="width: 20px; height: 20px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg></i></button>
+                    <button class="control-btn play-btn" id="btn-play-pause" aria-label="Play" style="width: 44px; height: 44px; background: var(--accent-color); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center;"><i data-lucide="play" style="width: 24px; height: 24px; margin-left: 2px;" fill="currentColor"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg></i></button>
+                    <button class="control-btn" id="btn-next" aria-label="Next"><i data-lucide="skip-forward" style="width: 20px; height: 20px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg></i></button>
                     <button class="control-btn" style="display: none;"><i data-lucide="list-video" style="width: 20px; height: 20px;"></i></button>
                 </div>
                 
@@ -232,22 +232,22 @@
         <div id="page-now-playing" class="page-overlay">
             <div class="np-header">
                 <button class="icon-btn" onclick="document.getElementById('page-now-playing').classList.remove('active')">
-                    <i data-lucide="chevron-down" style="color: var(--accent-color);"></i>
+                    <i data-lucide="chevron-down" style="color: var(--accent-color);"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></i>
                 </button>
                 <div class="np-header-title" style="color: var(--accent-color); font-weight: 600;">Now Playing</div>
                 <div style="display: flex; gap: 8px; align-items: center;">
                     <button class="icon-btn" id="np-btn-eq" title="Equalizer" aria-label="Equalizer">
-                        <i data-lucide="sliders" style="width: 22px; height: 22px; color: var(--secondary-text);"></i>
+                        <i data-lucide="sliders" style="width: 22px; height: 22px; color: var(--secondary-text);"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"></line><line x1="4" x2="4" y1="10" y2="3"></line><line x1="12" x2="12" y1="21" y2="12"></line><line x1="12" x2="12" y1="8" y2="3"></line><line x1="20" x2="20" y1="21" y2="16"></line><line x1="20" x2="20" y1="12" y2="3"></line><line x1="2" x2="6" y1="14" y2="14"></line><line x1="10" x2="14" y1="8" y2="8"></line><line x1="18" x2="22" y1="16" y2="16"></line></svg></i>
                     </button>
                     <button class="icon-btn" id="np-btn-queue" title="Up Next" aria-label="Up Next">
-                        <i data-lucide="list-music" style="width: 22px; height: 22px; color: var(--secondary-text);"></i>
+                        <i data-lucide="list-music" style="width: 22px; height: 22px; color: var(--secondary-text);"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"></path><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"></path><path d="M12 12H3"></path><path d="M16 6H3"></path><path d="M12 18H3"></path></svg></i>
                     </button>
                 </div>
             </div>
             
             <div class="np-artwork-container">
                 <div id="np-artwork" class="np-artwork">
-                    <i data-lucide="music" style="width: 64px; height: 64px;"></i>
+                    <i data-lucide="music" style="width: 64px; height: 64px;"><svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.6;"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg></i>
                 </div>
             </div>
 
@@ -257,7 +257,7 @@
                     <div id="np-artist" class="np-artist">-</div>
                 </div>
                 <button id="np-fav" class="icon-btn np-fav-btn">
-                    <i data-lucide="heart"></i>
+                    <i data-lucide="heart"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg></i>
                 </button>
             </div>
             
@@ -272,20 +272,20 @@
             </div>
             
             <div class="np-controls">
-                <button class="control-btn" id="np-prev"><i data-lucide="skip-back" style="width: 32px; height: 32px; fill: white; stroke: white;"></i></button>
+                <button class="control-btn" id="np-prev"><i data-lucide="skip-back" style="width: 32px; height: 32px; fill: white; stroke: white;"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg></i></button>
                 <button class="control-btn play-btn" id="np-play-pause">
-                    <i data-lucide="play" style="width: 40px; height: 40px; fill: white; margin-left: 4px;"></i>
+                    <i data-lucide="play" style="width: 40px; height: 40px; fill: white; margin-left: 4px;"><svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg></i>
                 </button>
-                <button class="control-btn" id="np-next"><i data-lucide="skip-forward" style="width: 32px; height: 32px; fill: white; stroke: white;"></i></button>
+                <button class="control-btn" id="np-next"><i data-lucide="skip-forward" style="width: 32px; height: 32px; fill: white; stroke: white;"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg></i></button>
             </div>
 
             <div class="np-secondary-actions" style="display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding: var(--spacing-2) var(--spacing-4);">
                 <button class="icon-btn" id="np-repeat-btn" title="Repeat Mode" aria-label="Repeat Mode">
-                    <i data-lucide="repeat" id="np-repeat-icon" style="width: 24px; height: 24px;"></i>
+                    <i data-lucide="repeat" id="np-repeat-icon" style="width: 24px; height: 24px;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"></path><path d="M3 11v-1a4 4 0 0 1 4-4h14"></path><path d="m7 22-4-4 4-4"></path><path d="M21 13v1a4 4 0 0 1-4 4H3"></path></svg></i>
                 </button>
                 <div id="np-repeat-badge" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--secondary-text); font-weight: 600;">Repeat Off</div>
                 <button class="icon-btn" id="np-up-next-btn" title="Up Next Queue" aria-label="Up Next Queue">
-                    <i data-lucide="list-music" style="width: 24px; height: 24px;"></i>
+                    <i data-lucide="list-music" style="width: 24px; height: 24px;"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"></path><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"></path><path d="M12 12H3"></path><path d="M16 6H3"></path><path d="M12 18H3"></path></svg></i>
                 </button>
             </div>
         </div>

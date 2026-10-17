@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1f102a" />
+      <stop offset="50%" stop-color="#140a1c" />
+      <stop offset="100%" stop-color="#09040d" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e040fb" />
+      <stop offset="100%" stop-color="#7c4dff" />
+    </linearGradient>
+  </defs>
+  <rect width="500" height="500" fill="url(#bg)" />
+  <!-- Cassette Tape -->
+  <rect x="150" y="150" width="200" height="130" rx="14" fill="none" stroke="url(#accent)" stroke-width="8" />
+  <rect x="180" y="195" width="140" height="50" rx="6" fill="#140a1c" stroke="rgba(255,255,255,0.2)" stroke-width="3" />
+  <circle cx="215" cy="220" r="14" fill="none" stroke="url(#accent)" stroke-width="5" />
+  <circle cx="285" cy="220" r="14" fill="none" stroke="url(#accent)" stroke-width="5" />
+  <text x="250" y="370" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="24" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="2">TAMIL CLASSICS</text>
+  <text x="250" y="405" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="14" font-weight="600" fill="#e040fb" text-anchor="middle" letter-spacing="3">GOLDEN ERA HITS</text>
+</svg>

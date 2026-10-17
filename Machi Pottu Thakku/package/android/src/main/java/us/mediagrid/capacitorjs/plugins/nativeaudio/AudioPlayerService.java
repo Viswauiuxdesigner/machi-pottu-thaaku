@@ -1,7 +1,10 @@
 package us.mediagrid.capacitorjs.plugins.nativeaudio;
 
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
 import androidx.annotation.Nullable;
@@ -35,11 +38,27 @@ public class AudioPlayerService extends MediaSessionService {
         return audioEffectsManager;
     }
 
+    private void ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null && manager.getNotificationChannel(PLAYBACK_CHANNEL_ID) == null) {
+                NotificationChannel playbackChannel = new NotificationChannel(
+                    PLAYBACK_CHANNEL_ID,
+                    "Audio playback",
+                    NotificationManager.IMPORTANCE_LOW
+                );
+                manager.createNotificationChannel(playbackChannel);
+                Log.i(TAG, "Playback notification channel created in AudioPlayerService");
+            }
+        }
+    }
+
     @Override
     public void onCreate() {
         Log.i(TAG, "Service being created");
         instance = this;
         super.onCreate();
+        ensureNotificationChannel();
 
         String packageName = getApplicationContext().getPackageName();
         Intent sessionActivityIntent = getPackageManager().getLaunchIntentForPackage(packageName);
@@ -177,11 +196,16 @@ public class AudioPlayerService extends MediaSessionService {
     @OptIn(markerClass = UnstableApi.class)
     @Override
     public void onUpdateNotification(MediaSession session, boolean startInForegroundRequired) {
-        AudioSources audioSources = getAudioSourcesFromMediaSession();
-        if (audioSources != null) {
-            AudioSource source = audioSources.forNotification();
-            if (source != null && (source.isTransitioning() || source.isPlaying())) {
-                startInForegroundRequired = true;
+        Player player = session != null ? session.getPlayer() : null;
+        if (player != null && (player.getPlayWhenReady() || player.isPlaying())) {
+            startInForegroundRequired = true;
+        } else {
+            AudioSources audioSources = getAudioSourcesFromMediaSession();
+            if (audioSources != null) {
+                AudioSource source = audioSources.forNotification();
+                if (source != null && (source.isTransitioning() || source.isPlaying())) {
+                    startInForegroundRequired = true;
+                }
             }
         }
 

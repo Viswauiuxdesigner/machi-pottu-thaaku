@@ -1411,18 +1411,22 @@ public class AudioSource extends Binder {
 
         if (useForNotification && audioMetadata.artworkSource != null) {
             try {
-                if (audioMetadata.artworkSource.startsWith("https:")) {
+                if (audioMetadata.artworkSource.startsWith("https:") || audioMetadata.artworkSource.startsWith("http:")) {
                     builder.setArtworkUri(Uri.parse(audioMetadata.artworkSource));
-                } else {
+                } else if (!audioMetadata.artworkSource.trim().isEmpty()) {
                     int bufferLength = 4 * 0x400; // 4KB
                     byte[] buffer = new byte[bufferLength];
                     int readLength;
                     ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 
+                    String assetPath = audioMetadata.artworkSource.startsWith("/")
+                        ? "public" + audioMetadata.artworkSource
+                        : "public/" + audioMetadata.artworkSource;
+
                     InputStream inputStream = pluginOwner
                         .getContext()
                         .getAssets()
-                        .open("public/" + audioMetadata.artworkSource);
+                        .open(assetPath);
 
                     while ((readLength = inputStream.read(buffer, 0, bufferLength)) != -1) {
                         outputStream.write(buffer, 0, readLength);

@@ -39,47 +39,54 @@ export function getReliableArtwork(track, library = null) {
 
     const lib = library || window.app?.musicLibrary || [];
 
-    // 2. Matching album/movie artwork
+    // 2. Matching album/movie artwork only when explicit and reliable (never generic placeholders)
     if (track.album && typeof track.album === 'string' && track.album.trim().length > 0 && lib.length > 0) {
         const albumTarget = track.album.toLowerCase().trim();
-        const albumMatch = lib.find(t =>
-            t.album && t.album.toLowerCase().trim() === albumTarget && t.thumbnail && t.thumbnail.trim().length > 0
-        );
-        if (albumMatch && albumMatch.thumbnail) {
-            if (albumMatch.thumbnail.startsWith('http')) {
-                cacheArtworkOffline(albumMatch.thumbnail);
+        const genericAlbums = ['single', 'unknown', 'unknown album', 'various', 'various artists', 'audio'];
+        if (!genericAlbums.includes(albumTarget)) {
+            const albumMatch = lib.find(t =>
+                t.album && t.album.toLowerCase().trim() === albumTarget && t.thumbnail && typeof t.thumbnail === 'string' && t.thumbnail.trim().length > 0
+            );
+            if (albumMatch && albumMatch.thumbnail) {
+                if (albumMatch.thumbnail.startsWith('http')) {
+                    cacheArtworkOffline(albumMatch.thumbnail);
+                }
+                return albumMatch.thumbnail;
             }
-            return albumMatch.thumbnail;
         }
     }
 
-    // 3. Matching artist artwork
+    // 3. Matching artist artwork from library ONLY when artist is explicit and genuine (never generic placeholders)
     if (track.artist && typeof track.artist === 'string' && track.artist.trim().length > 0 && lib.length > 0) {
         const artistTarget = track.artist.toLowerCase().trim();
-        const artistMatch = lib.find(t =>
-            t.artist && t.artist.toLowerCase().trim() === artistTarget && t.thumbnail && t.thumbnail.trim().length > 0
-        );
-        if (artistMatch && artistMatch.thumbnail) {
-            if (artistMatch.thumbnail.startsWith('http')) {
-                cacheArtworkOffline(artistMatch.thumbnail);
+        const genericArtists = ['unknown', 'unknown artist', 'various', 'various artists', 'artist'];
+        if (!genericArtists.includes(artistTarget)) {
+            const artistMatch = lib.find(t =>
+                t.artist && t.artist.toLowerCase().trim() === artistTarget && t.thumbnail && typeof t.thumbnail === 'string' && t.thumbnail.trim().length > 0
+            );
+            if (artistMatch && artistMatch.thumbnail) {
+                if (artistMatch.thumbnail.startsWith('http')) {
+                    cacheArtworkOffline(artistMatch.thumbnail);
+                }
+                return artistMatch.thumbnail;
             }
-            return artistMatch.thumbnail;
         }
     }
 
-    // 4. Deterministic curated local placeholder
-    const textContext = `${track.title || ''} ${track.album || ''} ${track.artist || ''} ${track.category || ''}`.toLowerCase();
+    // 4. Clean, offline-ready local SVG artwork based on collection / category / title
+    const category = (track.category || '').toLowerCase();
+    const title = (track.title || '').toLowerCase();
 
-    if (textContext.includes('melody') || textContext.includes('love') || textContext.includes('romantic') || textContext.includes('feel')) {
+    if (category.includes('melod') || title.includes('melody') || title.includes('love') || title.includes('romantic')) {
         return '/assets/covers/melody.svg';
     }
-    if (textContext.includes('folk') || textContext.includes('kuthu') || textContext.includes('gaana') || textContext.includes('beat') || textContext.includes('thara')) {
+    if (category.includes('folk') || category.includes('flok') || title.includes('folk') || title.includes('kuthu') || title.includes('gaana')) {
         return '/assets/covers/folk.svg';
     }
-    if (textContext.includes('retro') || textContext.includes('classic') || textContext.includes('80s') || textContext.includes('90s') || textContext.includes('ilayaraja') || textContext.includes('spb')) {
+    if (category.includes('classic') || category.includes('old') || title.includes('retro') || title.includes('classic')) {
         return '/assets/covers/retro.svg';
     }
-    if (textContext.includes('hit') || textContext.includes('mass') || textContext.includes('trending') || textContext.includes('ani') || textContext.includes('anirudh')) {
+    if (category.includes('release') || category.includes('hit') || title.includes('hit') || title.includes('trending')) {
         return '/assets/covers/tamil-hits.svg';
     }
 
