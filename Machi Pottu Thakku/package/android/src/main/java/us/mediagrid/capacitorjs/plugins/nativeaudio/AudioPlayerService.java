@@ -19,6 +19,7 @@ import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.media.audiofx.AudioEffect;
 import android.media.audiofx.BassBoost;
 import android.media.audiofx.Equalizer;
 import org.json.JSONObject;
@@ -38,10 +39,14 @@ public class AudioPlayerService extends MediaSessionService {
 
     public AudioEffectsManager getAudioEffectsManager() {
         if (audioEffectsManager != null && exoPlayer != null) {
-            int sid = exoPlayer.getAudioSessionId();
-            if (sid > 0 && (!audioEffectsManager.isAvailable() || audioEffectsManager.getCurrentSessionId() != sid)) {
-                Log.i(TAG, "Attaching audio effects in getAudioEffectsManager to session: " + sid);
-                audioEffectsManager.attachToSession(sid);
+            try {
+                int sid = exoPlayer.getAudioSessionId();
+                if (sid > 0 && (!audioEffectsManager.isAvailable() || audioEffectsManager.getCurrentSessionId() != sid)) {
+                    Log.i(TAG, "Attaching audio effects in getAudioEffectsManager to session: " + sid);
+                    audioEffectsManager.attachToSession(sid);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Could not query audioSessionId in getAudioEffectsManager", e);
             }
         }
         return audioEffectsManager;
@@ -107,10 +112,14 @@ public class AudioPlayerService extends MediaSessionService {
             @Override
             public void onPlaybackStateChanged(int playbackState) {
                 if (audioEffectsManager != null && exoPlayer != null) {
-                    int sid = exoPlayer.getAudioSessionId();
-                    if (sid > 0 && (!audioEffectsManager.isAvailable() || audioEffectsManager.getCurrentSessionId() != sid)) {
-                        Log.i(TAG, "Attaching audio effects on playback state change to session: " + sid);
-                        audioEffectsManager.attachToSession(sid);
+                    try {
+                        int sid = exoPlayer.getAudioSessionId();
+                        if (sid > 0 && (!audioEffectsManager.isAvailable() || audioEffectsManager.getCurrentSessionId() != sid)) {
+                            Log.i(TAG, "Attaching audio effects on playback state change to session: " + sid);
+                            audioEffectsManager.attachToSession(sid);
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "Error checking audio session ID on playback state change", e);
                     }
                 }
             }
@@ -118,10 +127,14 @@ public class AudioPlayerService extends MediaSessionService {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 if (isPlaying && audioEffectsManager != null && exoPlayer != null) {
-                    int sid = exoPlayer.getAudioSessionId();
-                    if (sid > 0 && (!audioEffectsManager.isAvailable() || audioEffectsManager.getCurrentSessionId() != sid)) {
-                        Log.i(TAG, "Attaching audio effects on isPlaying change to session: " + sid);
-                        audioEffectsManager.attachToSession(sid);
+                    try {
+                        int sid = exoPlayer.getAudioSessionId();
+                        if (sid > 0 && (!audioEffectsManager.isAvailable() || audioEffectsManager.getCurrentSessionId() != sid)) {
+                            Log.i(TAG, "Attaching audio effects on isPlaying change to session: " + sid);
+                            audioEffectsManager.attachToSession(sid);
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "Error checking audio session ID on isPlaying change", e);
                     }
                 }
             }
@@ -341,7 +354,9 @@ public class AudioPlayerService extends MediaSessionService {
         public AudioEffectsManager(Context context, int audioSessionId) {
             this.context = context.getApplicationContext();
             loadPreferences();
-            attachToSession(audioSessionId);
+            if (audioSessionId > 0) {
+                attachToSession(audioSessionId);
+            }
         }
 
         public synchronized boolean isAvailable() {
@@ -358,6 +373,7 @@ public class AudioPlayerService extends MediaSessionService {
                 return;
             }
             if (currentSessionId == audioSessionId && isAvailable && equalizer != null) {
+                applySettings();
                 return;
             }
 
@@ -365,9 +381,45 @@ public class AudioPlayerService extends MediaSessionService {
             this.currentSessionId = audioSessionId;
 
             try {
-                equalizer = new Equalizer(0, audioSessionId);
+                // Broadcast ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION
                 try {
-                    bassBoost = new BassBoost(0, audioSessionId);
+                    Intent intent = new Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION);
+                    intent.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, audioSessionId);
+                    intent.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.getPackageName());
+                    context.sendBroadcast(intent);
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to broadcast ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION", e);
+                }
+
+                // Priority 1000 ensures this application effect has priority control
+                equalizer = new Equalizer(1000, audioSessionId);
+                boolean eqControl = equalizer.hasControl();
+                short numBands = equalizer.getNumberOfBands();
+                short[] bandRange = equalizer.getBandLevelRange();
+                Log.i(TAG, "Equalizer created on session " + audioSessionId + ": control=" + eqControl + ", bands=" + numBands + ", range=[" + bandRange[0] + ", " + bandRange[1] + "] mB");
+
+                for (short b = 0; b < numBands; b++) {
+                    try {
+                        Log.i(TAG, "Equalizer band " + b + ": centerFreq=" + (equalizer.getCenterFreq(b) / 1000) + " Hz");
+                    } catch (Exception ignored) {}
+                }
+
+                equalizer.setControlStatusListener((effect, controlGranted) -> {
+                    Log.i(TAG, "Equalizer control status changed: granted=" + controlGranted);
+                    if (controlGranted) {
+                        applySettings();
+                    }
+                });
+
+                try {
+                    bassBoost = new BassBoost(1000, audioSessionId);
+                    Log.i(TAG, "BassBoost created on session " + audioSessionId + ": control=" + bassBoost.hasControl() + ", strengthSupported=" + bassBoost.getStrengthSupported());
+                    bassBoost.setControlStatusListener((effect, controlGranted) -> {
+                        Log.i(TAG, "BassBoost control status changed: granted=" + controlGranted);
+                        if (controlGranted) {
+                            applySettings();
+                        }
+                    });
                 } catch (Exception e) {
                     Log.w(TAG, "BassBoost unsupported on device: " + e.getMessage());
                     bassBoost = null;
@@ -380,9 +432,9 @@ public class AudioPlayerService extends MediaSessionService {
                 isAvailable = true;
 
                 applySettings();
-                Log.i(TAG, "AudioEffects successfully attached to session " + audioSessionId);
+                Log.i(TAG, "AudioEffects successfully attached and configured on session " + audioSessionId);
             } catch (Exception e) {
-                Log.e(TAG, "AudioEffects initialization failed on session " + audioSessionId + ": " + e.getMessage());
+                Log.e(TAG, "AudioEffects initialization failed on session " + audioSessionId + ": " + e.getMessage(), e);
                 isAvailable = false;
                 release();
             }
@@ -413,8 +465,25 @@ public class AudioPlayerService extends MediaSessionService {
         }
 
         private void applySettings() {
-            if (!isAvailable || equalizer == null) return;
+            if (!isAvailable || equalizer == null) {
+                Log.d(TAG, "applySettings skipped: isAvailable=" + isAvailable + ", equalizer=" + (equalizer != null));
+                return;
+            }
             try {
+                if (!isEnabled) {
+                    equalizer.setEnabled(false);
+                    if (bassBoost != null) {
+                        bassBoost.setEnabled(false);
+                    }
+                    Log.i(TAG, "Equalizer and BassBoost disabled (bypassed)");
+                    return;
+                }
+
+                equalizer.setEnabled(true);
+                if (bassBoost != null) {
+                    bassBoost.setEnabled(true);
+                }
+
                 short numBands = equalizer.getNumberOfBands();
                 if (numBands <= 0) return;
 
@@ -422,34 +491,72 @@ public class AudioPlayerService extends MediaSessionService {
                 short minLevel = bandRange[0];
                 short maxLevel = bandRange[1];
 
-                // Map 0..100 to minLevel..maxLevel
-                short bassLevel = (short) (minLevel + (maxLevel - minLevel) * (bassValue / 100.0f));
-                short midLevel = (short) (minLevel + (maxLevel - minLevel) * (midValue / 100.0f));
-                short trebleLevel = (short) (minLevel + (maxLevel - minLevel) * (trebleValue / 100.0f));
+                // Calculate target gains in millibels (50 is 0 mB flat)
+                short bassGain = calcGain(bassValue, minLevel, maxLevel);
+                short midGain = calcGain(midValue, minLevel, maxLevel);
+                short trebleGain = calcGain(trebleValue, minLevel, maxLevel);
 
+                // Map each hardware band to its acoustic role based on real center frequency
                 for (short i = 0; i < numBands; i++) {
-                    if (i == 0) {
-                        equalizer.setBandLevel(i, bassLevel);
-                    } else if (i == numBands - 1) {
-                        equalizer.setBandLevel(i, trebleLevel);
-                    } else if (i < numBands / 2) {
-                        short lowMid = (short) ((bassLevel + midLevel) / 2);
-                        equalizer.setBandLevel(i, lowMid);
-                    } else if (i == numBands / 2) {
-                        equalizer.setBandLevel(i, midLevel);
+                    short targetLevel;
+                    int freqHz = -1;
+                    try {
+                        freqHz = equalizer.getCenterFreq(i) / 1000;
+                    } catch (Exception ignored) {}
+
+                    if (freqHz > 0) {
+                        if (freqHz < 350) {
+                            // Sub-bass and bass (< 350 Hz): e.g. 60Hz, 230Hz
+                            targetLevel = bassGain;
+                        } else if (freqHz <= 2500) {
+                            // Midrange / Vocals (350Hz - 2.5kHz): e.g. 910Hz, 1kHz
+                            targetLevel = midGain;
+                        } else {
+                            // Highs / Treble (> 2.5kHz): e.g. 3.6kHz, 4kHz, 14kHz
+                            targetLevel = trebleGain;
+                        }
                     } else {
-                        short highMid = (short) ((midLevel + trebleLevel) / 2);
-                        equalizer.setBandLevel(i, highMid);
+                        // Positional fallback if getCenterFreq is unavailable
+                        if (numBands == 5) {
+                            if (i <= 1) targetLevel = bassGain;
+                            else if (i == 2) targetLevel = midGain;
+                            else targetLevel = trebleGain;
+                        } else {
+                            if (i < numBands / 3) {
+                                targetLevel = bassGain;
+                            } else if (i < (2 * numBands) / 3) {
+                                targetLevel = midGain;
+                            } else {
+                                targetLevel = trebleGain;
+                            }
+                        }
                     }
+
+                    // Clamp to device band range
+                    if (targetLevel < minLevel) targetLevel = minLevel;
+                    if (targetLevel > maxLevel) targetLevel = maxLevel;
+
+                    equalizer.setBandLevel(i, targetLevel);
+                    Log.d(TAG, "Band " + i + " (" + (freqHz > 0 ? freqHz + "Hz" : "pos " + i) + ") set to " + targetLevel + " mB");
                 }
 
-                // BassBoost effect: strength 0..1000 (neutral 0 at <=50%, up to 1000 at 100%)
+                // BassBoost hardware effect
                 if (bassBoost != null && bassBoost.getStrengthSupported()) {
                     short boostStrength = (short) Math.min(1000, Math.max(0, (bassValue - 50) * 20));
                     bassBoost.setStrength(boostStrength);
+                    Log.d(TAG, "BassBoost strength set to " + boostStrength);
                 }
             } catch (Exception e) {
                 Log.w(TAG, "Error applying audio effect settings", e);
+            }
+        }
+
+        private static short calcGain(int sliderVal, short minLevel, short maxLevel) {
+            if (sliderVal == 50) return 0;
+            if (sliderVal > 50) {
+                return (short) Math.round(((sliderVal - 50) / 50.0f) * maxLevel);
+            } else {
+                return (short) Math.round(((50 - sliderVal) / 50.0f) * minLevel);
             }
         }
 
@@ -464,6 +571,19 @@ public class AudioPlayerService extends MediaSessionService {
                 obj.put("sessionId", currentSessionId);
                 if (isAvailable && equalizer != null) {
                     obj.put("numBands", equalizer.getNumberOfBands());
+                    obj.put("hasControl", equalizer.hasControl());
+                    obj.put("effectEnabled", equalizer.getEnabled());
+                    short[] range = equalizer.getBandLevelRange();
+                    obj.put("minBandLevel", range[0]);
+                    obj.put("maxBandLevel", range[1]);
+                }
+                if (bassBoost != null) {
+                    obj.put("bassBoostSupported", bassBoost.getStrengthSupported());
+                    obj.put("bassBoostHasControl", bassBoost.hasControl());
+                    obj.put("bassBoostEnabled", bassBoost.getEnabled());
+                    if (bassBoost.getStrengthSupported()) {
+                        obj.put("bassBoostStrength", bassBoost.getRoundedStrength());
+                    }
                 }
             } catch (Exception ignored) {}
             return obj;
@@ -492,6 +612,16 @@ public class AudioPlayerService extends MediaSessionService {
         }
 
         public synchronized void release() {
+            if (currentSessionId > 0) {
+                try {
+                    Intent closeIntent = new Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION);
+                    closeIntent.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, currentSessionId);
+                    closeIntent.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.getPackageName());
+                    context.sendBroadcast(closeIntent);
+                } catch (Exception be) {
+                    Log.w(TAG, "Failed to broadcast ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION", be);
+                }
+            }
             if (equalizer != null) {
                 try { equalizer.release(); } catch (Exception ignored) {}
                 equalizer = null;

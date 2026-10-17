@@ -464,11 +464,24 @@ public class AudioPlayerPlugin extends Plugin {
             int mid = call.getInt("mid", 50);
             int treble = call.getInt("treble", 50);
 
-            AudioPlayerService.AudioEffectsManager fx = getAudioEffectsManager();
-            fx.setBandLevels(bass, mid, treble);
-
-            JSObject res = toJSObject(fx.getStatus());
-            call.resolve(res);
+            postToLooper("setEqualizerBands", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx == null) {
+                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    }
+                    if (call.hasOption("enabled")) {
+                        fx.setEnabled(call.getBoolean("enabled", true));
+                    }
+                    fx.setBandLevels(bass, mid, treble);
+                    JSObject res = toJSObject(fx.getStatus());
+                    call.resolve(res);
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error setting equalizer bands", ex);
+                    call.reject("There was an issue setting equalizer bands: " + ex.getMessage(), ex);
+                }
+            });
         } catch (Exception ex) {
             call.reject("There was an issue setting equalizer bands.", ex);
         }
@@ -478,10 +491,21 @@ public class AudioPlayerPlugin extends Plugin {
     public void setEqualizerEnabled(PluginCall call) {
         try {
             boolean enabled = call.getBoolean("enabled", true);
-            AudioPlayerService.AudioEffectsManager fx = getAudioEffectsManager();
-            fx.setEnabled(enabled);
-            JSObject res = toJSObject(fx.getStatus());
-            call.resolve(res);
+            postToLooper("setEqualizerEnabled", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx == null) {
+                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    }
+                    fx.setEnabled(enabled);
+                    JSObject res = toJSObject(fx.getStatus());
+                    call.resolve(res);
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error toggling equalizer enabled state", ex);
+                    call.reject("There was an issue toggling equalizer enabled state: " + ex.getMessage(), ex);
+                }
+            });
         } catch (Exception ex) {
             call.reject("There was an issue toggling equalizer enabled state.", ex);
         }
@@ -490,20 +514,23 @@ public class AudioPlayerPlugin extends Plugin {
     @PluginMethod
     public void getEqualizerStatus(PluginCall call) {
         try {
-            AudioPlayerService.AudioEffectsManager fx = getAudioEffectsManager();
-            JSObject res = toJSObject(fx.getStatus());
-            call.resolve(res);
+            postToLooper("getEqualizerStatus", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx == null) {
+                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    }
+                    JSObject res = toJSObject(fx.getStatus());
+                    call.resolve(res);
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error getting equalizer status", ex);
+                    call.reject("There was an issue getting equalizer status: " + ex.getMessage(), ex);
+                }
+            });
         } catch (Exception ex) {
             call.reject("There was an issue getting equalizer status.", ex);
         }
-    }
-
-    private AudioPlayerService.AudioEffectsManager getAudioEffectsManager() {
-        AudioPlayerService service = AudioPlayerService.getInstance();
-        if (service != null && service.getAudioEffectsManager() != null) {
-            return service.getAudioEffectsManager();
-        }
-        return new AudioPlayerService.AudioEffectsManager(getContext(), 0);
     }
 
     @PluginMethod

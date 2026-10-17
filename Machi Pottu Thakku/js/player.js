@@ -239,18 +239,32 @@ class AudioPlayer {
         const sliderBass = document.getElementById('eq-slider-bass');
         const sliderMid = document.getElementById('eq-slider-mid');
         const sliderTreble = document.getElementById('eq-slider-treble');
-        const onSliderChange = () => {
+        let eqThrottleTimer = null;
+        const onSliderChange = (isFinal = false) => {
             const b = parseInt(sliderBass?.value || 50, 10);
             const m = parseInt(sliderMid?.value || 50, 10);
             const t = parseInt(sliderTreble?.value || 50, 10);
             // Clear active preset buttons to indicate custom EQ curve
             document.querySelectorAll('.eq-preset-btn').forEach(btn => btn.classList.remove('active'));
-            this.setEqualizerBands(b, m, t);
+            this.eqSettings = { bass: b, mid: m, treble: t };
+            this.updateEqSlidersUI();
+
+            if (isFinal) {
+                if (eqThrottleTimer) { clearTimeout(eqThrottleTimer); eqThrottleTimer = null; }
+                this.setEqualizerBands(b, m, t);
+            } else {
+                if (!eqThrottleTimer) {
+                    eqThrottleTimer = setTimeout(() => {
+                        eqThrottleTimer = null;
+                        this.setEqualizerBands(this.eqSettings.bass, this.eqSettings.mid, this.eqSettings.treble);
+                    }, 40);
+                }
+            }
         };
         [sliderBass, sliderMid, sliderTreble].forEach(sl => {
             if (sl) {
-                sl.addEventListener('input', onSliderChange);
-                sl.addEventListener('change', onSliderChange);
+                sl.addEventListener('input', () => onSliderChange(false));
+                sl.addEventListener('change', () => onSliderChange(true));
             }
         });
 
@@ -654,7 +668,8 @@ class AudioPlayer {
                     else if (this.repeatMode === 'all') initialRepeatMode = 2;
                     NativeAudio.setRepeatMode({ audioId: 'main', mode: initialRepeatMode }).catch(() => {});
                     if (this.eqSettings) {
-                        NativeAudio.setEqualizerBands({ audioId: 'main', ...this.eqSettings }).catch(() => {});
+                        NativeAudio.setEqualizerBands({ audioId: 'main', ...this.eqSettings, enabled: this.eqEnabled }).catch(() => {});
+                        NativeAudio.setEqualizerEnabled({ enabled: this.eqEnabled }).catch(() => {});
                     }
 
                     if (!this.nativeCallbacksRegistered) {
@@ -877,6 +892,9 @@ class AudioPlayer {
         // Replenish native queue lookahead window & Up Next UI
         this.maintainNativeQueue();
         this.renderUpNextDrawer();
+
+        // Re-apply equalizer settings to ensure effect session remains synchronized across transitions
+        this.applyNativeAudioEq().catch(() => {});
     }
 
     async syncFromNative() {
@@ -1469,7 +1487,8 @@ class AudioPlayer {
             await NativeAudio.setEqualizerBands({
                 bass: this.eqSettings.bass,
                 mid: this.eqSettings.mid,
-                treble: this.eqSettings.treble
+                treble: this.eqSettings.treble,
+                enabled: this.eqEnabled
             });
             await NativeAudio.setEqualizerEnabled({
                 enabled: this.eqEnabled
@@ -1522,11 +1541,11 @@ class AudioPlayer {
     applyEqualizerPreset(presetName) {
         const presets = {
             flat: { bass: 50, mid: 50, treble: 50 },
-            bass: { bass: 85, mid: 50, treble: 45 },
-            vocal: { bass: 40, mid: 80, treble: 60 },
-            pop: { bass: 65, mid: 60, treble: 70 },
-            rock: { bass: 80, mid: 40, treble: 75 },
-            classical: { bass: 50, mid: 70, treble: 65 }
+            bass: { bass: 90, mid: 45, treble: 45 },
+            vocal: { bass: 30, mid: 85, treble: 55 },
+            pop: { bass: 70, mid: 55, treble: 75 },
+            rock: { bass: 85, mid: 35, treble: 80 },
+            classical: { bass: 45, mid: 70, treble: 65 }
         };
         const p = presets[presetName] || presets.flat;
         this.setEqualizerBands(p.bass, p.mid, p.treble);
@@ -1593,7 +1612,9 @@ class AudioPlayer {
                         if (!this.eqEnabled) {
                             label.textContent = 'Equalizer Bypassed (Off)';
                         } else if (status && status.isAvailable) {
-                            label.textContent = `Hardware DSP Active (Session ${status.sessionId || 'Ready'})`;
+                            const bands = status.numBands ? `${status.numBands}-Band ` : '';
+                            const ctrl = status.hasControl ? 'Hardware DSP Active' : 'DSP Attached';
+                            label.textContent = `${bands}${ctrl} (Session ${status.sessionId || 'Ready'})`;
                         } else {
                             label.textContent = 'DSP Initializing / Waiting for Playback';
                         }
