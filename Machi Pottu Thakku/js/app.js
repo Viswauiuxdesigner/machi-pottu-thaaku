@@ -25,7 +25,7 @@ export function getTrackCollection(track) {
 class App {
     constructor() {
         console.log("[RUNTIME] Local Music Library version loaded");
-        
+
         this.currentSearchQuery = '';
         this.currentSearchResults = [];
         this.musicLibrary = [];
@@ -38,16 +38,6 @@ class App {
         // Initialize Icons
         if (window.lucide) lucide.createIcons();
 
-        // Register Service Worker
-        if ('serviceWorker' in navigator) {
-            try {
-                await navigator.serviceWorker.register('/service-worker.js');
-                console.log('[SW] Service Worker Registered');
-            } catch (e) {
-                console.error('[SW] Service Worker Registration Failed', e);
-            }
-        }
-
         // Clear local storage for old youtube home data
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
@@ -56,13 +46,25 @@ class App {
             }
         }
 
-        // Fetch music library
-        await this.loadMusicLibrary();
+        // Hydrate library from persistent cache immediately for instant offline render
+        try {
+            const cachedLib = localStorage.getItem('mpt_cached_music_library') || sessionStorage.getItem('mpt_filebase_library');
+            if (cachedLib) {
+                const parsed = JSON.parse(cachedLib);
+                const songs = parsed.songs || parsed;
+                if (Array.isArray(songs) && songs.length > 0) {
+                    this.musicLibrary = songs;
+                    console.log(`[FILEBASE LIBRARY] Loaded ${this.musicLibrary.length} tracks from cache`);
+                }
+            }
+        } catch (e) {
+            console.warn("[FILEBASE LIBRARY] Cache hydration error:", e);
+        }
 
         // Setup Android Back Button Listener (Capacitor & Webview fallback)
         this.setupBackButton();
 
-        // Setup Navigation Listeners
+        // Setup Navigation Listeners (Available immediately offline)
         document.querySelectorAll('.nav-item').forEach(el => {
             el.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -87,10 +89,10 @@ class App {
 
         // Setup Downloads Sort Dropdown
         this.setupDownloadsSort();
-        
+
         // Dynamic Greeting
         this.updateGreeting();
-        
+
         // Explore Button
         const btnExplore = document.getElementById('btn-explore');
         if (btnExplore) {
@@ -106,18 +108,21 @@ class App {
 
         // Setup Search
         this.setupSearch();
-        
+
         // Setup Network Listeners
-        window.addEventListener('online', () => this.updateNetworkStatus(true));
+        window.addEventListener('online', () => {
+            this.updateNetworkStatus(true);
+            this.loadMusicLibrary(); // Auto-refresh when coming back online
+        });
         window.addEventListener('offline', () => this.updateNetworkStatus(false));
         this.updateNetworkStatus(navigator.onLine);
-        
+
         // Setup Load More Button (Hidden for local library as search is instant/unlimited)
         const btnLoadMoreContainer = document.getElementById('load-more-container');
         if (btnLoadMoreContainer) {
             btnLoadMoreContainer.style.display = 'none';
         }
-        
+
         // Setup Refresh Button
         const btnRefresh = document.getElementById('btn-refresh-library');
         if (btnRefresh) {
@@ -132,45 +137,79 @@ class App {
                 }
             });
         }
-        
-        // Load initial data
+
+        // Load initial data from cache immediately (doesn't block UI)
         this.loadHomeData();
+
+        // Register Service Worker in background
+        if ('serviceWorker' in navigator) {
+            try {
+                navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+            } catch (e) {}
+        }
+
+        // Fetch fresh music library in background without blocking app startup
+        this.loadMusicLibrary();
     }
 
     async loadMusicLibrary(forceRefresh = false) {
-        console.log("[FILEBASE LIBRARY] Loading library");
+        console.log("[FILEBASE LIBRARY] Loading library (background/online)");
+
+        // If offline and we already have cached library, do not attempt failing network request
+        if (!navigator.onLine && this.musicLibrary.length > 0 && !forceRefresh) {
+            console.log("[FILEBASE LIBRARY] Running offline with cached library");
+            return;
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+
         try {
-            const response = await fetch(window.getApiUrl('/.netlify/functions/music-library'));
+            const response = await fetch(window.getApiUrl('/.netlify/functions/music-library'), {
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
             if (!response.ok) throw new Error('Failed to load music library from serverless function');
             const data = await response.json();
-            
+
             if (data.error) throw new Error(data.error);
 
             this.musicLibrary = data.songs || [];
-            
-            // Cache it
-            sessionStorage.setItem('mpt_filebase_library', JSON.stringify({
+
+            // Persist to both localStorage and sessionStorage
+            const cachePayload = JSON.stringify({
                 timestamp: Date.now(),
                 songs: this.musicLibrary
-            }));
-            
-            console.log(`[FILEBASE LIBRARY] Objects found: ${this.musicLibrary.length}`);
-            console.log(`[FILEBASE LIBRARY] Audio files: ${this.musicLibrary.length}`);
-            console.log("[FILEBASE LIBRARY] Library ready");
-        } catch (error) {
-            console.error('[FILEBASE LIBRARY] Error loading music library:', error);
-            
-            // Fallback to cache if network fails
-            const cachedStr = sessionStorage.getItem('mpt_filebase_library');
-            if (cachedStr) {
-                const cachedData = JSON.parse(cachedStr);
-                if (cachedData && cachedData.songs && cachedData.songs.length > 0) {
-                    this.musicLibrary = cachedData.songs;
-                    console.log("[FILEBASE LIBRARY] Loaded from local cache as fallback");
-                    return;
-                }
+            });
+            try {
+                localStorage.setItem('mpt_cached_music_library', cachePayload);
+            } catch (e) {}
+            try {
+                sessionStorage.setItem('mpt_filebase_library', cachePayload);
+            } catch (e) {}
+
+            console.log(`[FILEBASE LIBRARY] Loaded ${this.musicLibrary.length} songs from server`);
+
+            // Refresh Home screen if currently visible
+            const homePage = document.getElementById('page-home');
+            if (homePage && homePage.classList.contains('active')) {
+                this.loadHomeData();
             }
-            window.uiManager.showNotification("Failed to load music library. Backend credentials might be missing.", "error");
+        } catch (error) {
+            clearTimeout(timeoutId);
+            console.warn('[FILEBASE LIBRARY] Notice:', error.message || error);
+
+            // If offline, silently preserve existing cache
+            if (!navigator.onLine || error.name === 'AbortError') {
+                console.log("[FILEBASE LIBRARY] Offline mode active; preserved cached library.");
+                return;
+            }
+
+            // Only notify if online and request truly errored on server
+            if (this.musicLibrary.length === 0) {
+                window.uiManager.showNotification("Unable to reach music server. You can still play your Downloads.", "info");
+            }
         }
     }
 
@@ -178,17 +217,21 @@ class App {
         const index = this.musicLibrary.findIndex(t => t.id === updatedTrack.id);
         if (index !== -1) {
             this.musicLibrary[index] = updatedTrack;
-            sessionStorage.setItem('mpt_filebase_library', JSON.stringify({
+            const cachePayload = JSON.stringify({
                 timestamp: Date.now(),
                 songs: this.musicLibrary
-            }));
+            });
+            try {
+                localStorage.setItem('mpt_cached_music_library', cachePayload);
+                sessionStorage.setItem('mpt_filebase_library', cachePayload);
+            } catch (e) {}
         }
     }
 
     updateGreeting() {
         const hour = new Date().getHours();
         let greeting = "Good evening";
-        
+
         if (hour >= 5 && hour < 12) {
             greeting = "Good morning";
         } else if (hour >= 12 && hour < 17) {
@@ -198,17 +241,17 @@ class App {
         } else {
             greeting = "Good night";
         }
-        
+
         const greetingEl = document.getElementById('header-greeting');
         if (greetingEl) {
             greetingEl.textContent = `${greeting}, Machi 👋`;
         }
     }
-    
+
     updateNetworkStatus(isOnline) {
         const el = document.getElementById('network-status');
         if (!el) return;
-        
+
         if (isOnline) {
             el.className = 'network-status online';
             el.innerHTML = '<span class="status-dot"></span> <span class="status-text">Online</span>';
@@ -234,9 +277,14 @@ class App {
                         CapApp.exitApp();
                     }
                 });
+                CapApp.addListener('appStateChange', (state) => {
+                    if (state && state.isActive && window.player && typeof window.player.syncFromNative === 'function') {
+                        window.player.syncFromNative();
+                    }
+                });
                 listenerAdded = true;
             } catch (e) {
-                console.warn('[BACK] Error adding Capacitor App backButton listener:', e);
+                console.warn('[BACK] Error adding Capacitor App listeners:', e);
             }
         }
 
@@ -259,7 +307,7 @@ class App {
         if (searchInput) searchInput.value = '';
         this.currentSearchQuery = '';
         this.currentSearchResults = [];
-        
+
         // Hide collection header if present
         const collectionHeader = document.getElementById('collection-header');
         if (collectionHeader) {
@@ -285,10 +333,10 @@ class App {
 
     setupSearch() {
         const searchInput = document.getElementById('search-input');
-        
+
         searchInput.addEventListener('input', (e) => {
             const query = e.target.value.trim();
-            
+
             // Hide collection header when actively searching
             const collectionHeader = document.getElementById('collection-header');
             if (collectionHeader) {
@@ -305,7 +353,7 @@ class App {
                 if (window.lucide) lucide.createIcons();
                 return;
             }
-            
+
             this.performSearch(query);
         });
 
@@ -315,7 +363,7 @@ class App {
                 const query = e.target.textContent;
                 searchInput.value = query;
                 searchInput.dispatchEvent(new Event('input'));
-                
+
                 // Highlight active chip
                 document.querySelectorAll('.search-chip').forEach(c => c.classList.remove('active'));
                 e.target.classList.add('active');
@@ -327,9 +375,9 @@ class App {
         console.log(`[SEARCH] query: ${query}`);
         console.log("[FILEBASE LIBRARY] Search source: dynamically loaded serverless library");
         this.currentSearchQuery = query;
-        
+
         const lowercaseQuery = query.toLowerCase();
-        
+
         this.currentSearchResults = this.musicLibrary.filter(song => {
             return (
                 (song.title && song.title.toLowerCase().includes(lowercaseQuery)) ||
@@ -339,10 +387,10 @@ class App {
                 (song.year && song.year.toString().includes(lowercaseQuery))
             );
         });
-        
+
         console.log(`[SEARCH] matched: ${this.currentSearchResults.length} tracks`);
         window.uiManager.renderTrackList(this.currentSearchResults, 'search-results', "No results found for '" + query + "'");
-        
+
         const btnLoadMoreContainer = document.getElementById('load-more-container');
         if (btnLoadMoreContainer) {
             btnLoadMoreContainer.style.display = 'none'; // No pagination needed
@@ -491,49 +539,50 @@ class App {
     loadHomeData() {
         const container = document.getElementById('collections-grid');
         if (!container) return;
-        
+
         container.innerHTML = '';
-        
+
         const folderMap = new Map();
-        
+
         this.musicLibrary.forEach(song => {
             const parts = (song.s3Key || "").split('/');
             // Tracks at the root directory will have songFolder = ""
             const songFolder = parts.length > 1 ? parts[parts.length - 2] : "";
-            
+
             if (!folderMap.has(songFolder)) {
                 folderMap.set(songFolder, []);
             }
             folderMap.get(songFolder).push(song);
         });
-        
+
         for (const [folder, tracks] of folderMap.entries()) {
             if (tracks.length === 0) continue;
-            
+
             const title = folder === "" ? "Recently Added" : folder;
             const id = folder === "" ? "recently-added" : folder.toLowerCase().replace(/[^a-z0-9]/g, '-');
-            
-            const trackWithThumb = tracks.find(t => t.thumbnail);
-            const thumbnail = trackWithThumb ? trackWithThumb.thumbnail : `https://picsum.photos/seed/${title.replace(/ /g, '')}/500/500`;
-            
+
+            const thumbnail = (typeof window.getCollectionCover === 'function')
+                ? window.getCollectionCover(title, tracks)
+                : (tracks.find(t => t.thumbnail)?.thumbnail || '/assets/covers/default.svg');
+
             console.log(`[HOME] Rendering collection: ${title} with ${tracks.length} tracks`);
-            
+
             const card = document.createElement('div');
             card.className = 'collection-card grid-card';
             card.dataset.id = id;
-            
+
             card.innerHTML = `
-                <img src="${thumbnail}" class="grid-artwork" loading="lazy" alt="${title}">
+                <img src="${thumbnail}" class="grid-artwork" loading="lazy" alt="${title}" onerror="this.src='/assets/covers/default.svg'">
                 <div class="grid-details">
                     <div class="grid-title">${title}</div>
                     <div class="grid-artist" style="color: var(--secondary-text); font-size: 13px;">${tracks.length} songs</div>
                 </div>
             `;
-            
+
             card.addEventListener('click', () => {
                 this.openCollection(title, tracks);
             });
-            
+
             container.appendChild(card);
         }
 
@@ -562,9 +611,10 @@ class App {
         const { folder, name: collectionName } = getTrackCollection(track);
         container.style.display = 'block';
 
-        const artworkHtml = track.thumbnail
-            ? `<img src="${track.thumbnail}" class="last-played-artwork" loading="lazy" alt="${track.title}">`
-            : `<div class="last-played-artwork placeholder"><i data-lucide="music"></i></div>`;
+        const artworkUrl = (typeof window.getReliableArtwork === 'function')
+            ? window.getReliableArtwork(track)
+            : (track.thumbnail || '/assets/covers/default.svg');
+        const artworkHtml = `<img src="${artworkUrl}" class="last-played-artwork" loading="lazy" alt="${track.title}" onerror="this.src='/assets/covers/default.svg';">`;
 
         container.innerHTML = `
             <div class="section-header" style="margin-bottom: var(--spacing-2);">
@@ -573,7 +623,7 @@ class App {
             <div class="last-played-card" data-id="${track.id}">
                 ${artworkHtml}
                 <div class="last-played-details">
-                    <div class="last-played-badge"><i data-lucide="clock" style="width: 12px; height: 12px;"></i> Resume Playing</div>
+                    <div class="last-played-badge"><i data-lucide="clock" style="width: 12px; height: 12px;"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></i> Resume Playing</div>
                     <div class="last-played-title">${track.title || 'Unknown Title'}</div>
                     <div class="last-played-meta">
                         <span class="last-played-artist">${track.artist || 'Unknown Artist'}</span>
@@ -581,7 +631,7 @@ class App {
                     </div>
                 </div>
                 <button class="last-played-play-btn" aria-label="Play Collection">
-                    <i data-lucide="play" style="width: 20px; height: 20px; margin-left: 2px;" fill="currentColor"></i>
+                    <i data-lucide="play" style="width: 20px; height: 20px; margin-left: 2px;" fill="currentColor"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg></i>
                 </button>
             </div>
         `;
@@ -620,10 +670,10 @@ class App {
         const tracks = rawFavorites.map(fav => {
             let canonical = null;
             if (this.musicLibrary && this.musicLibrary.length > 0) {
-                canonical = this.musicLibrary.find(t => String(t.id) === String(fav.id));
+                canonical = this.musicLibrary.find(t => String(t.id) === String(fav.id) || (t.s3Key && fav.s3Key && t.s3Key === fav.s3Key));
             }
             if (!canonical && window.OfflineManager && typeof window.OfflineManager.getLocalTrack === 'function') {
-                canonical = window.OfflineManager.getLocalTrack(fav.id);
+                canonical = window.OfflineManager.getLocalTrack(fav.id) || (fav.s3Key ? window.OfflineManager.getLocalTrack(fav.s3Key) : null);
             }
             if (canonical) {
                 return {
@@ -640,11 +690,11 @@ class App {
         });
         window.uiManager.renderTrackList(tracks, 'favorites-results', "You haven't favorited any tracks yet.");
     }
-    
+
     setupDownloadsSort() {
         const sortBtn = document.getElementById('downloads-sort-btn');
         const sortMenu = document.getElementById('downloads-sort-menu');
-        
+
         if (sortBtn && sortMenu) {
             sortBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -693,7 +743,7 @@ class App {
     loadDownloads() {
         if (!window.OfflineManager) return;
         const tracks = window.OfflineManager.getOfflineTracks() || [];
-        
+
         const countEl = document.getElementById('downloads-count');
         if (countEl) {
             countEl.textContent = `Downloaded Songs (${tracks.length})`;

@@ -18,6 +18,8 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import org.json.JSONException;
+import org.json.JSONObject;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import java.util.HashMap;
@@ -78,6 +80,11 @@ public class AudioPlayerPlugin extends Plugin {
                 call.getBoolean("isBackgroundMusic", false),
                 call.getBoolean("loop", false)
             );
+
+            String initialTrackId = call.getString("trackId");
+            if (initialTrackId != null && !initialTrackId.isEmpty()) {
+                audioSource.trackId = initialTrackId;
+            }
 
             if (audioSources.count() == 0 && !audioSource.useForNotification) {
                 throw new RuntimeException(
@@ -223,14 +230,417 @@ public class AudioPlayerPlugin extends Plugin {
             }
 
             AudioSource audioSource = audioSources.get(audioId(call));
+            String newSource = call.getString("source");
+            String trackId = call.getString("trackId");
 
             postToLooper("changeAudioSource", call, () -> {
-                audioSource.changeAudioSource(call.getString("source"));
+                audioSource.changeAudioSource(newSource, trackId);
 
                 call.resolve();
             });
         } catch (Exception ex) {
             call.reject("There was an issue changing the audio source.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setQueue(PluginCall call) {
+        try {
+            if (!audioSourceExists("setQueue", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            com.getcapacitor.JSArray itemsArray = call.getArray("items");
+            int startIndex = call.getInt("startIndex", 0);
+            String endpoint = call.getString("endpoint");
+
+            if (itemsArray == null || itemsArray.length() == 0) {
+                call.reject("items array is required and must not be empty");
+                return;
+            }
+
+            java.util.List<AudioSource.QueueItem> queueItems = new java.util.ArrayList<>();
+            for (int i = 0; i < itemsArray.length(); i++) {
+                JSONObject rawObj = itemsArray.getJSONObject(i);
+                JSObject itemObj = toJSObject(rawObj);
+                if (itemObj != null) {
+                    queueItems.add(new AudioSource.QueueItem(
+                        itemObj.getString("source"),
+                        itemObj.getString("trackId"),
+                        itemObj.getString("friendlyTitle"),
+                        itemObj.getString("artistName"),
+                        itemObj.getString("albumTitle"),
+                        itemObj.getString("artworkSource"),
+                        itemObj.getString("s3Key"),
+                        itemObj.optLong("urlFetchedAt", 0L),
+                        itemObj.optBoolean("isOffline", false)
+                    ));
+                }
+            }
+
+            postToLooper("setQueue", call, () -> {
+                audioSource.setQueue(queueItems, startIndex, endpoint);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting the queue.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void addQueueItems(PluginCall call) {
+        try {
+            if (!audioSourceExists("addQueueItems", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            com.getcapacitor.JSArray itemsArray = call.getArray("items");
+
+            if (itemsArray == null || itemsArray.length() == 0) {
+                call.resolve();
+                return;
+            }
+
+            java.util.List<AudioSource.QueueItem> queueItems = new java.util.ArrayList<>();
+            for (int i = 0; i < itemsArray.length(); i++) {
+                JSONObject rawObj = itemsArray.getJSONObject(i);
+                JSObject itemObj = toJSObject(rawObj);
+                if (itemObj != null) {
+                    queueItems.add(new AudioSource.QueueItem(
+                        itemObj.getString("source"),
+                        itemObj.getString("trackId"),
+                        itemObj.getString("friendlyTitle"),
+                        itemObj.getString("artistName"),
+                        itemObj.getString("albumTitle"),
+                        itemObj.getString("artworkSource"),
+                        itemObj.getString("s3Key"),
+                        itemObj.optLong("urlFetchedAt", 0L),
+                        itemObj.optBoolean("isOffline", false)
+                    ));
+                }
+            }
+
+            postToLooper("addQueueItems", call, () -> {
+                audioSource.addQueueItems(queueItems);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue adding queue items.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void playNext(PluginCall call) {
+        try {
+            if (!audioSourceExists("playNext", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            com.getcapacitor.JSObject rawObj = call.getObject("item");
+            if (rawObj == null) {
+                call.reject("item object is required");
+                return;
+            }
+            AudioSource.QueueItem item = new AudioSource.QueueItem(
+                rawObj.getString("source"),
+                rawObj.getString("trackId"),
+                rawObj.getString("friendlyTitle"),
+                rawObj.getString("artistName"),
+                rawObj.getString("albumTitle"),
+                rawObj.getString("artworkSource"),
+                rawObj.getString("s3Key"),
+                rawObj.optLong("urlFetchedAt", 0L),
+                rawObj.optBoolean("isOffline", false)
+            );
+
+            postToLooper("playNext", call, () -> {
+                audioSource.playNext(item);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue inserting playNext track.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void removeQueueItem(PluginCall call) {
+        try {
+            if (!audioSourceExists("removeQueueItem", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            String queueItemUid = call.getString("queueItemUid");
+            if (queueItemUid == null || queueItemUid.isEmpty()) {
+                call.reject("queueItemUid is required");
+                return;
+            }
+
+            postToLooper("removeQueueItem", call, () -> {
+                audioSource.removeQueueItem(queueItemUid);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue removing queue item.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setRepeatMode(PluginCall call) {
+        try {
+            if (!audioSourceExists("setRepeatMode", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            int mode = call.getInt("mode", 0);
+
+            postToLooper("setRepeatMode", call, () -> {
+                audioSource.setRepeatMode(mode);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting repeat mode.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getRepeatMode(PluginCall call) {
+        try {
+            if (!audioSourceExists("getRepeatMode", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            JSObject ret = new JSObject();
+            ret.put("mode", audioSource.getRepeatMode());
+            call.resolve(ret);
+        } catch (Exception ex) {
+            call.reject("There was an issue getting repeat mode.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getQueue(PluginCall call) {
+        try {
+            if (!audioSourceExists("getQueue", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            java.util.List<AudioSource.QueueItem> list = audioSource.getMasterPlaylist();
+            com.getcapacitor.JSArray arr = new com.getcapacitor.JSArray();
+            synchronized (list) {
+                for (AudioSource.QueueItem item : list) {
+                    JSObject obj = new JSObject();
+                    obj.put("queueItemUid", item.queueItemUid);
+                    obj.put("trackId", item.trackId);
+                    obj.put("friendlyTitle", item.friendlyTitle);
+                    obj.put("artistName", item.artistName);
+                    obj.put("albumTitle", item.albumTitle);
+                    obj.put("artworkSource", item.artworkSource);
+                    obj.put("source", item.source);
+                    obj.put("isOffline", item.isOffline);
+                    arr.put(obj);
+                }
+            }
+            JSObject res = new JSObject();
+            res.put("queue", arr);
+            res.put("currentIndex", audioSource.getCurrentMasterIndex());
+            res.put("currentQueueItemUid", audioSource.getCurrentQueueItemUid());
+            call.resolve(res);
+        } catch (Exception ex) {
+            call.reject("There was an issue getting the queue.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setEqualizerBands(PluginCall call) {
+        try {
+            int bass = call.getInt("bass", 50);
+            int mid = call.getInt("mid", 50);
+            int treble = call.getInt("treble", 50);
+
+            postToLooper("setEqualizerBands", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx == null) {
+                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    }
+                    if (call.hasOption("enabled")) {
+                        fx.setEnabled(call.getBoolean("enabled", true));
+                    }
+                    fx.setBandLevels(bass, mid, treble);
+                    JSObject res = toJSObject(fx.getStatus());
+                    call.resolve(res);
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error setting equalizer bands", ex);
+                    call.reject("There was an issue setting equalizer bands: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting equalizer bands.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setEqualizerEnabled(PluginCall call) {
+        try {
+            boolean enabled = call.getBoolean("enabled", true);
+            postToLooper("setEqualizerEnabled", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx == null) {
+                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    }
+                    fx.setEnabled(enabled);
+                    JSObject res = toJSObject(fx.getStatus());
+                    call.resolve(res);
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error toggling equalizer enabled state", ex);
+                    call.reject("There was an issue toggling equalizer enabled state: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue toggling equalizer enabled state.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getEqualizerStatus(PluginCall call) {
+        try {
+            postToLooper("getEqualizerStatus", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx == null) {
+                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    }
+                    JSObject res = toJSObject(fx.getStatus());
+                    call.resolve(res);
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error getting equalizer status", ex);
+                    call.reject("There was an issue getting equalizer status: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue getting equalizer status.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setSpatialAudioParams(PluginCall call) {
+        try {
+            boolean enabled = call.getBoolean("enabled", false);
+            int intensity = call.getInt("intensity", 75);
+            int width = call.getInt("width", 80);
+            int distance = call.getInt("distance", 40);
+            int azimuth = call.getInt("azimuth", 0);
+
+            postToLooper("setSpatialAudioParams", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    if (proc != null) {
+                        proc.setParams(enabled, intensity, width, distance, azimuth);
+                        proc.savePreferences(getContext());
+                    }
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx != null) {
+                        fx.setSpatialParams(enabled, intensity, width, distance, azimuth);
+                    }
+                    JSONObject status = (proc != null) ? proc.getStatus() : (fx != null ? fx.getStatus() : new JSONObject());
+                    call.resolve(toJSObject(status));
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error setting spatial audio params", ex);
+                    call.reject("There was an issue setting spatial audio params: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting spatial audio params.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setSpatialAudioEnabled(PluginCall call) {
+        try {
+            boolean enabled = call.getBoolean("enabled", false);
+            postToLooper("setSpatialAudioEnabled", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    if (proc != null) {
+                        proc.setEnabled(enabled);
+                        proc.savePreferences(getContext());
+                    }
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx != null) {
+                        fx.setSpatialEnabled(enabled);
+                    }
+                    JSONObject status = (proc != null) ? proc.getStatus() : (fx != null ? fx.getStatus() : new JSONObject());
+                    call.resolve(toJSObject(status));
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error toggling spatial audio enabled state", ex);
+                    call.reject("There was an issue toggling spatial audio enabled state: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue toggling spatial audio enabled state.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getSpatialAudioStatus(PluginCall call) {
+        try {
+            postToLooper("getSpatialAudioStatus", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    JSONObject status = (proc != null) ? proc.getStatus() : (fx != null ? fx.getStatus() : new JSONObject());
+                    call.resolve(toJSObject(status));
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error getting spatial audio status", ex);
+                    call.reject("There was an issue getting spatial audio status: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue getting spatial audio status.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void queueNext(PluginCall call) {
+        try {
+            if (!audioSourceExists("queueNext", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            String nextSource = call.getString("source");
+            String nextTrackId = call.getString("trackId");
+            String expectedCurrentTrackId = call.getString("expectedCurrentTrackId");
+            boolean isOffline = call.getBoolean("isOffline", false);
+            AudioMetadata nextMetadata = new AudioMetadata(
+                call.getString("albumTitle"),
+                call.getString("artistName"),
+                call.getString("friendlyTitle"),
+                call.getString("artworkSource"),
+                null,
+                null
+            );
+
+            postToLooper("queueNext", call, () -> {
+                audioSource.queueNext(nextSource, nextMetadata, nextTrackId, expectedCurrentTrackId, isOffline);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue queuing the next track.", ex);
         }
     }
 
@@ -242,6 +652,7 @@ public class AudioPlayerPlugin extends Plugin {
             }
 
             AudioSource audioSource = audioSources.get(audioId(call));
+
 
             postToLooper("changeMetadata", call, () -> {
                 audioSource.changeMetadata(
@@ -719,5 +1130,23 @@ public class AudioPlayerPlugin extends Plugin {
 
     public void emitAudioEndEvent() {
         notifyListeners("nativeAudioEnd", new JSObject());
+    }
+
+    public void emitTrackTransitionEvent(JSObject data) {
+        notifyListeners("nativeTrackTransition", data != null ? data : new JSObject());
+    }
+
+    public void emitPlaybackStatusChangeEvent(JSObject data) {
+        notifyListeners("playbackStatusChange", data != null ? data : new JSObject());
+    }
+
+    private JSObject toJSObject(JSONObject obj) throws JSONException {
+        if (obj == null) {
+            return null;
+        }
+        if (obj instanceof JSObject) {
+            return (JSObject) obj;
+        }
+        return new JSObject(obj.toString());
     }
 }

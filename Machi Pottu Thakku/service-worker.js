@@ -1,19 +1,47 @@
-const CACHE_NAME = 'mpt-cache-v6';
-const ASSETS_TO_CACHE = [
+const CACHE_NAME = 'mpt-cache-v8';
+const LOCAL_ASSETS_TO_CACHE = [
   '/',
   '/index.html',
-  '/css/styles.css',
   '/manifest.webmanifest',
-  'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap',
-  'https://unpkg.com/lucide@latest'
+  '/js/vendor/lucide.min.js',
+  '/js/vendor/peerjs.min.js',
+  '/assets/covers/default.svg',
+  '/assets/covers/tamil-hits.svg',
+  '/assets/covers/melody.svg',
+  '/assets/covers/folk.svg',
+  '/assets/covers/retro.svg'
+];
+const EXTERNAL_ASSETS_TO_CACHE = [
+  'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap'
 ];
 
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => {
-        return cache.addAll(ASSETS_TO_CACHE);
-      })
+    caches.open(CACHE_NAME).then(async cache => {
+      // 1. Resiliently cache local assets (avoids install failure if an asset is missing)
+      await Promise.allSettled(
+        LOCAL_ASSETS_TO_CACHE.map(async url => {
+          try {
+            const res = await fetch(url);
+            if (res && (res.status === 200 || res.type === 'opaque')) {
+              await cache.put(url, res);
+            }
+          } catch (e) {}
+        })
+      );
+
+      // 2. Best-effort cache for external assets
+      await Promise.allSettled(
+        EXTERNAL_ASSETS_TO_CACHE.map(async url => {
+          try {
+            const res = await fetch(url);
+            if (res && (res.status === 200 || res.type === 'opaque')) {
+              await cache.put(url, res);
+            }
+          } catch (e) {}
+        })
+      );
+    })
   );
   self.skipWaiting();
 });

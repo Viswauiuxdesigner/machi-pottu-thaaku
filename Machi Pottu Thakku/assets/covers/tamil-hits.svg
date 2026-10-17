@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2a083a" />
+      <stop offset="50%" stop-color="#180422" />
+      <stop offset="100%" stop-color="#0d0213" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff416c" />
+      <stop offset="100%" stop-color="#ff4b2b" />
+    </linearGradient>
+  </defs>
+  <rect width="500" height="500" fill="url(#bg)" />
+  <circle cx="250" cy="210" r="130" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="6" />
+  <circle cx="250" cy="210" r="90" fill="none" stroke="rgba(255,65,108,0.2)" stroke-width="4" />
+  <!-- Flame/Beat icon -->
+  <path d="M250 130 C270 170 310 190 310 230 A 60 60 0 0 1 190 230 C190 190 225 170 250 130 Z" fill="url(#accent)" />
+  <circle cx="250" cy="245" r="22" fill="#2a083a" />
+  <text x="250" y="370" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="24" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="2">TAMIL HITS</text>
+  <text x="250" y="405" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="14" font-weight="600" fill="#ff758c" text-anchor="middle" letter-spacing="3">TRENDING TRACKS</text>
+</svg>
