@@ -545,13 +545,17 @@ public class AudioPlayerPlugin extends Plugin {
             postToLooper("setSpatialAudioParams", call, () -> {
                 try {
                     AudioPlayerService service = AudioPlayerService.getInstance();
-                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
-                    if (fx == null) {
-                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    if (proc != null) {
+                        proc.setParams(enabled, intensity, width, distance, azimuth);
+                        proc.savePreferences(getContext());
                     }
-                    fx.setSpatialParams(enabled, intensity, width, distance, azimuth);
-                    JSObject res = toJSObject(fx.getStatus());
-                    call.resolve(res);
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx != null) {
+                        fx.setSpatialParams(enabled, intensity, width, distance, azimuth);
+                    }
+                    JSONObject status = (proc != null) ? proc.getStatus() : (fx != null ? fx.getStatus() : new JSONObject());
+                    call.resolve(toJSObject(status));
                 } catch (Exception ex) {
                     Log.e(TAG, "Error setting spatial audio params", ex);
                     call.reject("There was an issue setting spatial audio params: " + ex.getMessage(), ex);
@@ -569,13 +573,17 @@ public class AudioPlayerPlugin extends Plugin {
             postToLooper("setSpatialAudioEnabled", call, () -> {
                 try {
                     AudioPlayerService service = AudioPlayerService.getInstance();
-                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
-                    if (fx == null) {
-                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    if (proc != null) {
+                        proc.setEnabled(enabled);
+                        proc.savePreferences(getContext());
                     }
-                    fx.setSpatialEnabled(enabled);
-                    JSObject res = toJSObject(fx.getStatus());
-                    call.resolve(res);
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx != null) {
+                        fx.setSpatialEnabled(enabled);
+                    }
+                    JSONObject status = (proc != null) ? proc.getStatus() : (fx != null ? fx.getStatus() : new JSONObject());
+                    call.resolve(toJSObject(status));
                 } catch (Exception ex) {
                     Log.e(TAG, "Error toggling spatial audio enabled state", ex);
                     call.reject("There was an issue toggling spatial audio enabled state: " + ex.getMessage(), ex);
@@ -592,12 +600,10 @@ public class AudioPlayerPlugin extends Plugin {
             postToLooper("getSpatialAudioStatus", call, () -> {
                 try {
                     AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
                     AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
-                    if (fx == null) {
-                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
-                    }
-                    JSObject res = toJSObject(fx.getStatus());
-                    call.resolve(res);
+                    JSONObject status = (proc != null) ? proc.getStatus() : (fx != null ? fx.getStatus() : new JSONObject());
+                    call.resolve(toJSObject(status));
                 } catch (Exception ex) {
                     Log.e(TAG, "Error getting spatial audio status", ex);
                     call.reject("There was an issue getting spatial audio status: " + ex.getMessage(), ex);

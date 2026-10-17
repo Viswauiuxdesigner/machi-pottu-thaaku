@@ -2058,17 +2058,25 @@ class AudioPlayer {
         osc2.frequency.exponentialRampToValueAtTime(84, startTime + duration);
         subOsc.frequency.exponentialRampToValueAtTime(21, startTime + duration);
 
-        // Volume Envelope
-        masterGain.gain.setValueAtTime(0.01, startTime);
-        masterGain.gain.exponentialRampToValueAtTime(0.4, startTime + 3.0);
-        masterGain.gain.linearRampToValueAtTime(0.85, startTime + 4.4);
-        masterGain.gain.setValueAtTime(0.85, startTime + 4.6);
+        // Read current spatial settings to parameterize the demo
+        const userIntensity = Math.max(0.25, (this.spatialSettings.intensity || 75) / 100.0);
+        const userWidth = Math.max(0.3, (this.spatialSettings.width || 80) / 100.0);
+        const userDistance = Math.max(0.2, (this.spatialSettings.distance || 40) / 100.0);
+
+        // Volume Envelope scaled by intensity
+        masterGain.gain.setValueAtTime(0.005, startTime);
+        masterGain.gain.exponentialRampToValueAtTime(0.35 * userIntensity, startTime + 3.0);
+        masterGain.gain.linearRampToValueAtTime(0.85 * userIntensity, startTime + 4.4);
+        masterGain.gain.setValueAtTime(0.85 * userIntensity, startTime + 4.6);
         masterGain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
 
-        // Air Absorption Filter
-        airFilter.frequency.setValueAtTime(900, startTime);
-        airFilter.frequency.exponentialRampToValueAtTime(10000, startTime + 4.4);
-        airFilter.frequency.exponentialRampToValueAtTime(700, startTime + duration);
+        // Air Absorption Filter scaled by distance
+        const initialAirFreq = Math.max(450, 1100 - userDistance * 600);
+        const peakAirFreq = Math.max(6500, 13000 - userDistance * 5000);
+        const endAirFreq = Math.max(350, 800 - userDistance * 450);
+        airFilter.frequency.setValueAtTime(initialAirFreq, startTime);
+        airFilter.frequency.exponentialRampToValueAtTime(peakAirFreq, startTime + 4.4);
+        airFilter.frequency.exponentialRampToValueAtTime(endAirFreq, startTime + duration);
 
         // Start Oscillators
         osc1.start(startTime);
@@ -2089,6 +2097,10 @@ class AudioPlayer {
         };
 
         // Real-Time 3D Trajectory Animation across 360° Space:
+        const startDist = 18.0 + userDistance * 16.0; // 21m to 34m
+        const passDist = 0.8 + userDistance * 3.0;   // 1.4m to 3.8m
+        const spanX = 14.0 + userWidth * 16.0;       // 18m to 30m
+
         const animStart = performance.now();
         const updatePanner = () => {
             if (!this.isDemoRunning) return;
@@ -2098,12 +2110,14 @@ class AudioPlayer {
             let x, z;
             if (progress < 0.48) {
                 const t = progress / 0.48;
-                x = -22.0 + t * 20.5;
-                z = -22.0 + t * 22.0;
+                // Approach from front-left
+                x = -spanX + t * (spanX - passDist);
+                z = -startDist + t * startDist;
             } else {
                 const t = (progress - 0.48) / 0.52;
-                x = -1.5 + t * 23.5;
-                z = 0.0 + t * 25.0;
+                // Roar past to rear-right
+                x = -passDist + t * (spanX + passDist);
+                z = t * (startDist * 1.1);
             }
 
             if (demoPanner.positionX) {
@@ -2320,7 +2334,7 @@ class AudioPlayer {
             if (!this.spatialSettings.enabled) {
                 label.textContent = '360° Spatial Audio Disabled (Stereo Bypass)';
             } else if (Capacitor.isNativePlatform()) {
-                label.textContent = 'Native DSP: Headphone Virtualizer & Reverb';
+                label.textContent = 'ExoPlayer DSP: Binaural ITD/ILD & Depth';
             } else {
                 label.textContent = 'Web Audio: HRTF 360° Positional Engine';
             }
@@ -2338,9 +2352,19 @@ class AudioPlayer {
                 NativeAudio.getSpatialAudioStatus({}).then(status => {
                     const label = document.getElementById('spatial-status-label');
                     if (label && this.spatialSettings.enabled && status) {
-                        const virtStr = status.virtualizerSupported ? 'Headphone Virtualizer' : 'Spatializer';
-                        const ctrlStr = status.virtualizerHasControl ? 'Hardware DSP Active' : 'Attached';
-                        label.textContent = `Native DSP: ${virtStr} (${ctrlStr})`;
+                        if (status.processorActive && status.isAttachedToSink) {
+                            if (status.processedFramesTotal > 0) {
+                                label.textContent = `ExoPlayer DSP: Processing Live Frames (${status.encoding || 'PCM_16BIT'})`;
+                            } else {
+                                label.textContent = 'ExoPlayer DSP: Ready (Active on playback)';
+                            }
+                        } else if (status.processorActive) {
+                            label.textContent = 'ExoPlayer DSP: Standby (Awaiting audio session)';
+                        } else if (status.isBypassed) {
+                            label.textContent = 'ExoPlayer DSP: Bypassed (Passthrough)';
+                        } else {
+                            label.textContent = 'Native DSP: Standby';
+                        }
                     }
                 }).catch(() => {});
             }
