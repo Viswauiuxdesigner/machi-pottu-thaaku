@@ -116,6 +116,7 @@ export class WebRTCPeerTransport {
         this.myPeerId = null;
         this.remotePeerId = null;
         this.connectionWatchdogTimer = null;
+        this.sessionId = 0;
     }
 
     init(role, onMessage, onStatus) {
@@ -205,10 +206,11 @@ export class WebRTCPeerTransport {
         }
     }
 
-    setupDataConnection(conn) {
+    setupDataConnection(conn, currentSession = this.sessionId) {
         this.dataConnection = conn;
 
         conn.on('open', () => {
+            if (this.sessionId !== currentSession) return;
             console.log("[LISTEN_TOGETHER_RTC] PeerJS DataConnection open & ready!");
             this.clearConnectionWatchdog();
             this.isOpen = true;
@@ -219,6 +221,7 @@ export class WebRTCPeerTransport {
         });
 
         conn.on('data', (rawMsg) => {
+            if (this.sessionId !== currentSession) return;
             try {
                 let msg = rawMsg;
                 if (typeof rawMsg === 'string') {
@@ -245,48 +248,69 @@ export class WebRTCPeerTransport {
         });
 
         conn.on('close', () => {
+            if (this.sessionId !== currentSession) return;
             console.log("[LISTEN_TOGETHER_RTC] PeerJS DataConnection closed");
-            this.isOpen = false;
             this.dataConnection = null;
-            if (this.onStatusCallback) {
-                this.onStatusCallback(SyncState.DISCONNECTED);
+            if (this.role === SyncRole.HOST && this.peer && !this.peer.destroyed) {
+                this.isOpen = true;
+                if (this.onStatusCallback) {
+                    this.onStatusCallback(SyncState.WAITING);
+                }
+            } else {
+                this.isOpen = false;
+                if (this.onStatusCallback) {
+                    this.onStatusCallback(SyncState.DISCONNECTED);
+                }
             }
         });
 
         conn.on('error', (err) => {
+            if (this.sessionId !== currentSession) return;
             console.error("[LISTEN_TOGETHER_RTC] PeerJS DataConnection error:", err);
         });
     }
 
     async startHost(roomId) {
+        this.close();
+        const currentSession = this.sessionId;
+
         this.roomId = roomId;
         this.role = SyncRole.HOST;
         this.myPeerId = `mpt-${roomId.toUpperCase()}`;
 
-        if (typeof window.Peer !== 'function') {
-            const err = "PeerJS library is missing or failed to load.";
+        const PeerClass = window.Peer || window.peerjs?.Peer;
+        if (typeof PeerClass !== 'function') {
+            const err = new Error("PeerJS library is missing or failed to load. Please ensure peerjs.min.js is accessible.");
             console.error("[LISTEN_TOGETHER_RTC]", err);
-            if (window.uiManager?.showNotification) {
-                window.uiManager.showNotification(err, "error");
-            }
-            throw new Error(err);
+            throw err;
         }
-
-        this.close();
 
         return new Promise((resolve, reject) => {
             let isResolved = false;
+            let hostTimeoutTimer = null;
+
+            hostTimeoutTimer = setTimeout(() => {
+                if (this.sessionId !== currentSession) return;
+                if (!isResolved) {
+                    isResolved = true;
+                    console.error("[LISTEN_TOGETHER_RTC] Host creation timed out waiting for PeerJS open event");
+                    this.close();
+                    const timeoutErr = new Error("Connection to signaling broker timed out. Please check your internet connection and retry.");
+                    timeoutErr.type = "timeout";
+                    reject(timeoutErr);
+                }
+            }, 12000);
 
             try {
                 console.log(`[LISTEN_TOGETHER_RTC] Registering host Peer ID: ${this.myPeerId}`);
-                this.peer = new window.Peer(this.myPeerId, this.getPeerConfig());
+                this.peer = new PeerClass(this.myPeerId, this.getPeerConfig());
 
                 this.peer.on('open', (id) => {
+                    if (this.sessionId !== currentSession) return;
                     console.log(`[LISTEN_TOGETHER_RTC] Host peer opened with ID: ${id}`);
+                    if (hostTimeoutTimer) clearTimeout(hostTimeoutTimer);
                     this.myPeerId = id;
-                    if (this.onStatusCallback) {
-                        this.onStatusCallback(SyncState.WAITING);
-                    }
+                    this.isOpen = true;
                     if (!isResolved) {
                         isResolved = true;
                         resolve(true);
@@ -294,6 +318,10 @@ export class WebRTCPeerTransport {
                 });
 
                 this.peer.on('connection', (conn) => {
+                    if (this.sessionId !== currentSession) {
+                        try { conn.close(); } catch(e) {}
+                        return;
+                    }
                     console.log(`[LISTEN_TOGETHER_RTC] Receiver connecting: ${conn.peer}`);
                     // Room occupancy protection: reject extra receivers if already paired
                     if (this.dataConnection && this.dataConnection.open) {
@@ -302,10 +330,11 @@ export class WebRTCPeerTransport {
                         return;
                     }
 
-                    this.setupDataConnection(conn);
+                    this.setupDataConnection(conn, currentSession);
                 });
 
                 this.peer.on('disconnected', () => {
+                    if (this.sessionId !== currentSession) return;
                     console.warn("[LISTEN_TOGETHER_RTC] Host peer disconnected from signaling broker");
                     if (this.peer && !this.peer.destroyed) {
                         try { this.peer.reconnect(); } catch(e) {}
@@ -313,11 +342,14 @@ export class WebRTCPeerTransport {
                 });
 
                 this.peer.on('close', () => {
+                    if (this.sessionId !== currentSession) return;
                     console.log("[LISTEN_TOGETHER_RTC] Host peer destroyed");
                     this.isOpen = false;
                 });
 
                 this.peer.on('error', (err) => {
+                    if (this.sessionId !== currentSession) return;
+                    if (hostTimeoutTimer) clearTimeout(hostTimeoutTimer);
                     this.handlePeerError(err);
                     if (!isResolved) {
                         isResolved = true;
@@ -326,6 +358,8 @@ export class WebRTCPeerTransport {
                 });
 
             } catch (err) {
+                if (this.sessionId !== currentSession) return;
+                if (hostTimeoutTimer) clearTimeout(hostTimeoutTimer);
                 console.error("[LISTEN_TOGETHER_RTC] Failed to initialize host Peer:", err);
                 if (!isResolved) {
                     isResolved = true;
@@ -336,20 +370,20 @@ export class WebRTCPeerTransport {
     }
 
     async startReceiver(roomId) {
+        this.close();
+        const currentSession = this.sessionId;
+
         this.roomId = roomId;
         this.role = SyncRole.RECEIVER;
         this.remotePeerId = `mpt-${roomId.toUpperCase()}`;
 
-        if (typeof window.Peer !== 'function') {
-            const err = "PeerJS library is missing or failed to load.";
+        const PeerClass = window.Peer || window.peerjs?.Peer;
+        if (typeof PeerClass !== 'function') {
+            const err = new Error("PeerJS library is missing or failed to load. Please ensure peerjs.min.js is accessible.");
             console.error("[LISTEN_TOGETHER_RTC]", err);
-            if (window.uiManager?.showNotification) {
-                window.uiManager.showNotification(err, "error");
-            }
-            throw new Error(err);
+            throw err;
         }
 
-        this.close();
         this.startConnectionWatchdog(14000);
 
         return new Promise((resolve, reject) => {
@@ -358,9 +392,10 @@ export class WebRTCPeerTransport {
             try {
                 console.log(`[LISTEN_TOGETHER_RTC] Receiver creating Peer to connect to host: ${this.remotePeerId}`);
                 // Receiver lets broker assign a unique ID
-                this.peer = new window.Peer(this.getPeerConfig());
+                this.peer = new PeerClass(this.getPeerConfig());
 
                 this.peer.on('open', (id) => {
+                    if (this.sessionId !== currentSession) return;
                     console.log(`[LISTEN_TOGETHER_RTC] Receiver peer opened with ID: ${id}. Connecting to ${this.remotePeerId}...`);
                     this.myPeerId = id;
 
@@ -370,7 +405,7 @@ export class WebRTCPeerTransport {
                             serialization: 'json'
                         });
 
-                        this.setupDataConnection(conn);
+                        this.setupDataConnection(conn, currentSession);
 
                         if (!isResolved) {
                             isResolved = true;
@@ -386,6 +421,7 @@ export class WebRTCPeerTransport {
                 });
 
                 this.peer.on('disconnected', () => {
+                    if (this.sessionId !== currentSession) return;
                     console.warn("[LISTEN_TOGETHER_RTC] Receiver disconnected from signaling broker");
                     if (this.peer && !this.peer.destroyed) {
                         try { this.peer.reconnect(); } catch(e) {}
@@ -393,11 +429,13 @@ export class WebRTCPeerTransport {
                 });
 
                 this.peer.on('close', () => {
+                    if (this.sessionId !== currentSession) return;
                     console.log("[LISTEN_TOGETHER_RTC] Receiver peer destroyed");
                     this.isOpen = false;
                 });
 
                 this.peer.on('error', (err) => {
+                    if (this.sessionId !== currentSession) return;
                     this.handlePeerError(err);
                     if (!isResolved) {
                         isResolved = true;
@@ -406,6 +444,7 @@ export class WebRTCPeerTransport {
                 });
 
             } catch (err) {
+                if (this.sessionId !== currentSession) return;
                 console.error("[LISTEN_TOGETHER_RTC] Failed to initialize receiver Peer:", err);
                 if (!isResolved) {
                     isResolved = true;
@@ -428,6 +467,7 @@ export class WebRTCPeerTransport {
     }
 
     close() {
+        this.sessionId++;
         this.clearConnectionWatchdog();
 
         if (this.dataConnection) {
@@ -444,6 +484,7 @@ export class WebRTCPeerTransport {
         this.role = SyncRole.NONE;
         this.remotePeerId = null;
         this.myPeerId = null;
+        this.roomId = null;
     }
 }
 
@@ -483,6 +524,9 @@ export class SyncManager {
         this.transportType = TransportType.INTERNET;
         this.transport = null;
 
+        this.isCreatingRoom = false;
+        this.isJoiningRoom = false;
+
         this.clockSync = new ClockSynchronizer();
         this.currentSeq = 0;
         this.lastSeenSeq = 0;
@@ -517,49 +561,95 @@ export class SyncManager {
     bindUI() {
         const btnSync = document.getElementById('np-btn-sync');
         if (btnSync) {
-            btnSync.addEventListener('click', () => this.openSyncDrawer());
+            btnSync.onclick = () => this.openSyncDrawer();
         }
 
         const btnCreate = document.getElementById('sync-btn-create-room');
         if (btnCreate) {
-            btnCreate.addEventListener('click', () => this.createRoom());
+            btnCreate.onclick = () => this.createRoom();
         }
 
         const btnJoin = document.getElementById('sync-btn-join-room');
         if (btnJoin) {
-            btnJoin.addEventListener('click', () => {
-                const input = document.getElementById('sync-input-room-code');
-                const code = input ? input.value.trim() : '';
-                this.joinRoom(code);
-            });
+            btnJoin.onclick = () => this.joinRoomFromInput();
+        }
+
+        const inputCode = document.getElementById('sync-input-room-code');
+        if (inputCode) {
+            inputCode.onkeydown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.joinRoomFromInput();
+                }
+            };
         }
 
         const btnLeave = document.getElementById('sync-btn-leave-room');
         if (btnLeave) {
-            btnLeave.addEventListener('click', () => this.leaveRoom(true));
+            btnLeave.onclick = () => this.leaveRoom(true);
         }
 
         const btnCopy = document.getElementById('sync-btn-copy-code');
         if (btnCopy) {
-            btnCopy.addEventListener('click', () => this.copyRoomCode());
+            btnCopy.onclick = () => this.copyRoomCode();
         }
 
         const btnModeInternet = document.getElementById('sync-mode-internet');
         const btnModeLocal = document.getElementById('sync-mode-local');
         if (btnModeInternet && btnModeLocal) {
-            btnModeInternet.addEventListener('click', () => {
+            btnModeInternet.onclick = () => {
                 this.setTransportType(TransportType.INTERNET);
                 btnModeInternet.classList.add('active');
                 btnModeLocal.classList.remove('active');
-            });
-            btnModeLocal.addEventListener('click', () => {
+            };
+            btnModeLocal.onclick = () => {
                 this.setTransportType(TransportType.LOCAL_WIFI);
                 btnModeLocal.classList.add('active');
                 btnModeInternet.classList.remove('active');
-            });
+            };
         }
 
         this.renderDrawerUI();
+    }
+
+    updateCreateRoomButton(isCreating) {
+        const btn = document.getElementById('sync-btn-create-room');
+        if (!btn) return;
+        if (isCreating) {
+            btn.disabled = true;
+            btn.style.opacity = '0.7';
+            btn.style.pointerEvents = 'none';
+            btn.innerHTML = `<span class="sync-spinner"></span> Creating Room...`;
+        } else {
+            btn.disabled = false;
+            btn.style.opacity = '1';
+            btn.style.pointerEvents = '';
+            btn.innerHTML = `<i data-lucide="plus-circle" style="width: 18px; height: 18px; margin-right: 8px;"></i> Create Room`;
+            if (window.lucide?.createIcons) {
+                try { window.lucide.createIcons(); } catch(e) {}
+            }
+        }
+    }
+
+    updateJoinRoomButton(isJoining) {
+        const btn = document.getElementById('sync-btn-join-room');
+        const input = document.getElementById('sync-input-room-code');
+        if (btn) {
+            if (isJoining) {
+                btn.disabled = true;
+                btn.style.opacity = '0.7';
+                btn.style.pointerEvents = 'none';
+                btn.innerHTML = `<span class="sync-spinner"></span>`;
+            } else {
+                btn.disabled = false;
+                btn.style.opacity = '1';
+                btn.style.pointerEvents = '';
+                btn.textContent = 'Join';
+            }
+        }
+        if (input) {
+            input.disabled = isJoining;
+        }
     }
 
     setTransportType(type) {
@@ -587,7 +677,7 @@ export class SyncManager {
 
     validateRoomCode(code) {
         if (!code || typeof code !== 'string') return false;
-        return /^[0-9A-Za-z]{6}$/.test(code.trim());
+        return /^\d{6}$/.test(code.trim());
     }
 
     isInRoom() {
@@ -602,10 +692,35 @@ export class SyncManager {
         return this.role === SyncRole.RECEIVER && this.isInRoom();
     }
 
+    handleTransportStatus(status) {
+        console.log(`[LISTEN_TOGETHER] Transport status callback received: ${status}`);
+        if (status === SyncState.DISCONNECTED) {
+            if (this.role === SyncRole.HOST && this.transport?.peer && !this.transport.peer.destroyed) {
+                console.log("[LISTEN_TOGETHER] Receiver disconnected. Host returning to WAITING state.");
+                this.setState(SyncState.WAITING);
+                return;
+            }
+            this.setState(SyncState.DISCONNECTED);
+        } else {
+            this.setState(status);
+        }
+    }
+
     setState(newState) {
         const oldState = this.state;
         this.state = newState;
         console.log(`[LISTEN_TOGETHER] State transition: ${oldState} -> ${newState}`);
+
+        if (newState === SyncState.DISCONNECTED) {
+            this.role = SyncRole.NONE;
+            this.roomCode = null;
+            this.sharedTrack = null;
+            this.currentDriftMs = 0;
+            this.isCreatingRoom = false;
+            this.isJoiningRoom = false;
+            this.updateCreateRoomButton(false);
+            this.updateJoinRoomButton(false);
+        }
 
         if (newState === SyncState.READY && oldState !== SyncState.READY) {
             if (this.isHost()) {
@@ -645,45 +760,94 @@ export class SyncManager {
     }
 
     async createRoom() {
+        if (this.isCreatingRoom || this.isJoiningRoom) {
+            console.log("[LISTEN_TOGETHER] Room creation or join already in progress. Ignoring duplicate click.");
+            return;
+        }
+
         if (this.isInRoom()) {
             this.leaveRoom(false);
         }
 
-        this.roomCode = this.generate6DigitCode();
-        this.role = SyncRole.HOST;
-        this.currentSeq = 1;
-        this.lastSeenSeq = 0;
-        this.clockSync.reset();
+        this.isCreatingRoom = true;
+        this.updateCreateRoomButton(true);
 
-        this.setState(SyncState.CONNECTING);
-        this.transport = new WebRTCPeerTransport();
+        let attempts = 0;
+        let success = false;
 
-        this.transport.init(
-            this.role,
-            (msg) => this.handleIncomingMessage(msg),
-            (status) => this.setState(status)
-        );
+        while (attempts < 2 && !success) {
+            attempts++;
+            const newCode = this.generate6DigitCode();
+            console.log(`[LISTEN_TOGETHER] Generated room code attempt ${attempts}: ${newCode}`);
 
-        try {
-            await this.transport.startHost(this.roomCode);
-            this.setState(SyncState.WAITING);
+            const transport = new WebRTCPeerTransport();
+            transport.init(
+                SyncRole.HOST,
+                (msg) => this.handleIncomingMessage(msg),
+                (status) => this.handleTransportStatus(status)
+            );
 
-            if (window.uiManager?.showNotification) {
-                window.uiManager.showNotification(`Room created! Code: ${this.roomCode}. Share code with friend.`, "success");
-            }
-        } catch (err) {
-            console.error("[LISTEN_TOGETHER] Failed to create room:", err);
-            this.setState(SyncState.DISCONNECTED);
-            if (window.uiManager?.showNotification) {
-                window.uiManager.showNotification("Failed to create room. Please check internet connection.", "error");
+            try {
+                await transport.startHost(newCode);
+
+                // PeerJS host successfully opened and registered with signaling broker!
+                this.transport = transport;
+                this.roomCode = newCode;
+                this.role = SyncRole.HOST;
+                this.currentSeq = 1;
+                this.lastSeenSeq = 0;
+                this.clockSync.reset();
+
+                this.setState(SyncState.WAITING);
+                success = true;
+
+                if (window.uiManager?.showNotification) {
+                    window.uiManager.showNotification(`Room created! Code: ${this.roomCode}. Share code with friend.`, "success");
+                }
+            } catch (err) {
+                console.error(`[LISTEN_TOGETHER] Host creation failed on code ${newCode}:`, err);
+                try { transport.close(); } catch(e) {}
+
+                if (err?.type === 'unavailable-id' && attempts < 2) {
+                    console.warn(`[LISTEN_TOGETHER] Code ${newCode} was already taken. Retrying with a new code...`);
+                    continue;
+                }
+
+                this.setState(SyncState.DISCONNECTED);
+                let userMsg = "Failed to create room. Please check internet connection.";
+                if (err?.type === 'unavailable-id') {
+                    userMsg = "Room code is already active. Please try tapping Create Room again.";
+                } else if (err?.message) {
+                    userMsg = err.message;
+                }
+
+                if (window.uiManager?.showNotification) {
+                    window.uiManager.showNotification(userMsg, "error");
+                }
+                break;
             }
         }
+
+        this.isCreatingRoom = false;
+        this.updateCreateRoomButton(false);
+    }
+
+    async joinRoomFromInput() {
+        const input = document.getElementById('sync-input-room-code');
+        const code = input ? input.value.trim() : '';
+        await this.joinRoom(code);
     }
 
     async joinRoom(code) {
-        if (!this.validateRoomCode(code)) {
+        if (this.isJoiningRoom || this.isCreatingRoom) {
+            console.log("[LISTEN_TOGETHER] Connection attempt already in progress.");
+            return;
+        }
+
+        const trimmedCode = (code || '').trim();
+        if (!this.validateRoomCode(trimmedCode)) {
             if (window.uiManager?.showNotification) {
-                window.uiManager.showNotification("Please enter a valid 6-character room code.", "warning");
+                window.uiManager.showNotification("Please enter a valid 6-digit numeric room code.", "warning");
             }
             return;
         }
@@ -692,37 +856,55 @@ export class SyncManager {
             this.leaveRoom(false);
         }
 
-        this.roomCode = code.toUpperCase();
-        this.role = SyncRole.RECEIVER;
-        this.currentSeq = 0;
-        this.lastSeenSeq = 0;
-        this.clockSync.reset();
+        this.isJoiningRoom = true;
+        this.updateJoinRoomButton(true);
 
-        this.setState(SyncState.CONNECTING);
-        this.transport = new WebRTCPeerTransport();
-
-        this.transport.init(
-            this.role,
+        const transport = new WebRTCPeerTransport();
+        transport.init(
+            SyncRole.RECEIVER,
             (msg) => this.handleIncomingMessage(msg),
-            (status) => this.setState(status)
+            (status) => this.handleTransportStatus(status)
         );
 
         try {
-            await this.transport.startReceiver(this.roomCode);
+            console.log(`[LISTEN_TOGETHER] Receiver connecting to room ${trimmedCode}...`);
+            this.roomCode = trimmedCode;
+            this.role = SyncRole.RECEIVER;
+            this.currentSeq = 0;
+            this.lastSeenSeq = 0;
+            this.clockSync.reset();
+            this.setState(SyncState.CONNECTING);
+
+            await transport.startReceiver(trimmedCode);
+            this.transport = transport;
+
             if (window.uiManager?.showNotification) {
-                window.uiManager.showNotification(`Connecting to room ${this.roomCode}...`, "info");
+                window.uiManager.showNotification(`Connecting to room ${trimmedCode}...`, "info");
             }
         } catch (err) {
             console.error("[LISTEN_TOGETHER] Failed to join room:", err);
+            try { transport.close(); } catch(e) {}
+            this.transport = null;
             this.setState(SyncState.DISCONNECTED);
-            if (window.uiManager?.showNotification) {
-                window.uiManager.showNotification("Failed to connect to room. Verify the code and retry.", "error");
+
+            let userMsg = "Failed to connect to room. Verify the code and retry.";
+            if (err?.type === 'peer-unavailable') {
+                userMsg = "Room not found. Check the 6-digit code and ensure the host is waiting.";
+            } else if (err?.message) {
+                userMsg = err.message;
             }
+
+            if (window.uiManager?.showNotification) {
+                window.uiManager.showNotification(userMsg, "error");
+            }
+        } finally {
+            this.isJoiningRoom = false;
+            this.updateJoinRoomButton(false);
         }
     }
 
     leaveRoom(notifyPeer = true) {
-        if (this.state === SyncState.DISCONNECTED) return;
+        if (this.state === SyncState.DISCONNECTED && this.role === SyncRole.NONE) return;
 
         console.log("[LISTEN_TOGETHER] Leaving room...");
 
@@ -755,10 +937,6 @@ export class SyncManager {
         }
 
         const prevRole = this.role;
-        this.role = SyncRole.NONE;
-        this.roomCode = null;
-        this.sharedTrack = null;
-        this.currentDriftMs = 0;
         this.setState(SyncState.DISCONNECTED);
 
         if (window.uiManager?.showNotification) {
@@ -1433,6 +1611,10 @@ export class SyncManager {
             if (notInRoomSection) notInRoomSection.style.display = 'block';
             if (inRoomSection) inRoomSection.style.display = 'none';
             statusLabel.textContent = 'Co-listen in real-time with a friend';
+        }
+
+        if (window.lucide?.createIcons) {
+            try { window.lucide.createIcons(); } catch(e) {}
         }
     }
 }

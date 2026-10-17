@@ -540,7 +540,7 @@
                         <div class="sync-action-block">
                             <div class="sync-action-title">Start a Listening Session</div>
                             <p class="sync-action-desc">Create a room code to share with a friend and control playback synchronously.</p>
-                            <button id="sync-btn-create-room" class="sync-primary-btn">
+                            <button id="sync-btn-create-room" class="sync-primary-btn" onclick="window.syncManager?.createRoom()">
                                 <i data-lucide="plus-circle" style="width: 18px; height: 18px; margin-right: 8px;"></i> Create Room
                             </button>
                         </div>
@@ -549,8 +549,8 @@
 
                         <div class="sync-action-block">
                             <div class="sync-input-row">
-                                <input type="text" id="sync-input-room-code" class="sync-code-input" placeholder="6-digit code" maxlength="6" autocomplete="off" spellcheck="false">
-                                <button id="sync-btn-join-room" class="sync-secondary-btn">Join</button>
+                                <input type="text" id="sync-input-room-code" class="sync-code-input" placeholder="6-digit code" maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0,6)">
+                                <button id="sync-btn-join-room" class="sync-secondary-btn" onclick="window.syncManager?.joinRoomFromInput()">Join</button>
                             </div>
                         </div>
                     </div>
@@ -561,7 +561,7 @@
                             <div class="sync-room-code-container">
                                 <span class="sync-room-label">ROOM CODE</span>
                                 <div class="sync-room-code-display" id="sync-display-room-code">------</div>
-                                <button id="sync-btn-copy-code" class="sync-copy-btn" title="Copy Room Code">
+                                <button id="sync-btn-copy-code" class="sync-copy-btn" onclick="window.syncManager?.copyRoomCode()" title="Copy Room Code">
                                     <i data-lucide="copy" style="width: 16px; height: 16px;"></i> Copy
                                 </button>
                             </div>
@@ -589,7 +589,7 @@
                         </div>
 
                         <div class="sync-footer-actions">
-                            <button id="sync-btn-leave-room" class="sync-leave-btn">
+                            <button id="sync-btn-leave-room" class="sync-leave-btn" onclick="window.syncManager?.leaveRoom(true)">
                                 <i data-lucide="log-out" style="width: 16px; height: 16px; margin-right: 6px;"></i> Leave Room
                             </button>
                         </div>
