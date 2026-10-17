@@ -534,6 +534,81 @@ public class AudioPlayerPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setSpatialAudioParams(PluginCall call) {
+        try {
+            boolean enabled = call.getBoolean("enabled", false);
+            int intensity = call.getInt("intensity", 75);
+            int width = call.getInt("width", 80);
+            int distance = call.getInt("distance", 40);
+            int azimuth = call.getInt("azimuth", 0);
+
+            postToLooper("setSpatialAudioParams", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx == null) {
+                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    }
+                    fx.setSpatialParams(enabled, intensity, width, distance, azimuth);
+                    JSObject res = toJSObject(fx.getStatus());
+                    call.resolve(res);
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error setting spatial audio params", ex);
+                    call.reject("There was an issue setting spatial audio params: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting spatial audio params.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setSpatialAudioEnabled(PluginCall call) {
+        try {
+            boolean enabled = call.getBoolean("enabled", false);
+            postToLooper("setSpatialAudioEnabled", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx == null) {
+                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    }
+                    fx.setSpatialEnabled(enabled);
+                    JSObject res = toJSObject(fx.getStatus());
+                    call.resolve(res);
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error toggling spatial audio enabled state", ex);
+                    call.reject("There was an issue toggling spatial audio enabled state: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue toggling spatial audio enabled state.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getSpatialAudioStatus(PluginCall call) {
+        try {
+            postToLooper("getSpatialAudioStatus", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx == null) {
+                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    }
+                    JSObject res = toJSObject(fx.getStatus());
+                    call.resolve(res);
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error getting spatial audio status", ex);
+                    call.reject("There was an issue getting spatial audio status: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue getting spatial audio status.", ex);
+        }
+    }
+
+    @PluginMethod
     public void queueNext(PluginCall call) {
         try {
             if (!audioSourceExists("queueNext", call)) {

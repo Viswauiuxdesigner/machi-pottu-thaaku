@@ -101,7 +101,7 @@
                             <button class="btn-play-game" onclick="window.machiGuess.openGame()">PLAY</button>
                         </div>
                     </section>
-                    
+
 
                 </div>
 
@@ -216,7 +216,7 @@
                     <button class="control-btn" id="btn-next" aria-label="Next"><i data-lucide="skip-forward" style="width: 20px; height: 20px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg></i></button>
                     <button class="control-btn" style="display: none;"><i data-lucide="list-video" style="width: 20px; height: 20px;"></i></button>
                 </div>
-                
+
                 <!-- Progress bar hidden in mini player -->
                 <div class="player-progress" style="display: none;">
                     <span class="time-current" id="time-current">0:00</span>
@@ -236,6 +236,9 @@
                 </button>
                 <div class="np-header-title" style="color: var(--accent-color); font-weight: 600;">Now Playing</div>
                 <div style="display: flex; gap: 8px; align-items: center;">
+                    <button class="icon-btn" id="np-btn-spatial" title="360° Spatial Audio" aria-label="360° Spatial Audio">
+                        <i data-lucide="radio" style="width: 22px; height: 22px; color: var(--secondary-text);"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path></svg></i>
+                    </button>
                     <button class="icon-btn" id="np-btn-eq" title="Equalizer" aria-label="Equalizer">
                         <i data-lucide="sliders" style="width: 22px; height: 22px; color: var(--secondary-text);"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"></line><line x1="4" x2="4" y1="10" y2="3"></line><line x1="12" x2="12" y1="21" y2="12"></line><line x1="12" x2="12" y1="8" y2="3"></line><line x1="20" x2="20" y1="21" y2="16"></line><line x1="20" x2="20" y1="12" y2="3"></line><line x1="2" x2="6" y1="14" y2="14"></line><line x1="10" x2="14" y1="8" y2="8"></line><line x1="18" x2="22" y1="16" y2="16"></line></svg></i>
                     </button>
@@ -244,7 +247,7 @@
                     </button>
                 </div>
             </div>
-            
+
             <div class="np-artwork-container">
                 <div id="np-artwork" class="np-artwork">
                     <i data-lucide="music" style="width: 64px; height: 64px;"><svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.6;"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg></i>
@@ -260,7 +263,7 @@
                     <i data-lucide="heart"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg></i>
                 </button>
             </div>
-            
+
             <div class="np-progress">
                 <div class="np-progress-bar-container" id="np-progress-container">
                     <div class="np-progress-bar" id="np-progress-bar"></div>
@@ -270,7 +273,7 @@
                     <span id="np-time-total">0:00</span>
                 </div>
             </div>
-            
+
             <div class="np-controls">
                 <button class="control-btn" id="np-prev"><i data-lucide="skip-back" style="width: 32px; height: 32px; fill: white; stroke: white;"><svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg></i></button>
                 <button class="control-btn play-btn" id="np-play-pause">
@@ -380,6 +383,120 @@
                             </div>
                             <input type="range" class="eq-slider" id="eq-slider-treble" min="0" max="100" value="50">
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 360° Spatial Audio Drawer -->
+        <div id="drawer-spatial" class="bottom-drawer" aria-hidden="true">
+            <div class="drawer-backdrop" onclick="window.player.closeSpatialDrawer()"></div>
+            <div class="drawer-content">
+                <div class="drawer-header">
+                    <div class="drawer-title-group">
+                        <div class="drawer-title"><i data-lucide="radio" style="width: 20px; height: 20px; margin-right: 8px; color: var(--accent-color);"></i> 360° Spatial Audio</div>
+                        <div class="drawer-subtitle" id="spatial-status-label">Binaural 3D Surround Engine</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <label class="eq-toggle-wrap" title="Toggle Spatial Audio">
+                            <input type="checkbox" id="spatial-toggle-enabled" onchange="window.player.setSpatialAudioEnabled(this.checked)">
+                            <span class="eq-toggle-track"><span class="eq-toggle-thumb"></span></span>
+                        </label>
+                        <button class="icon-btn" onclick="window.player.closeSpatialDrawer()" aria-label="Close Spatial Audio">
+                            <i data-lucide="x"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="drawer-body">
+                    <!-- Interactive 360° Soundstage Radar -->
+                    <div class="spatial-radar-card" id="spatial-radar-card">
+                        <div class="spatial-radar-header">
+                            <span class="spatial-card-title">Virtual Soundstage (360°)</span>
+                            <span class="spatial-azimuth-badge" id="spatial-azimuth-label">FRONT 0° • 40% DISTANCE</span>
+                        </div>
+
+                        <div class="spatial-radar-wrapper">
+                            <div class="spatial-radar" id="spatial-radar">
+                                <span class="radar-cardinal cardinal-n">FRONT</span>
+                                <span class="radar-cardinal cardinal-e">RIGHT</span>
+                                <span class="radar-cardinal cardinal-s">BACK</span>
+                                <span class="radar-cardinal cardinal-w">LEFT</span>
+
+                                <div class="radar-ring ring-outer"></div>
+                                <div class="radar-ring ring-mid"></div>
+                                <div class="radar-ring ring-inner"></div>
+                                <div class="radar-axis axis-h"></div>
+                                <div class="radar-axis axis-v"></div>
+
+                                <div class="radar-center-head">
+                                    <i data-lucide="headphones" style="width: 22px; height: 22px; color: var(--accent-color);"></i>
+                                </div>
+
+                                <div class="spatial-puck" id="spatial-puck" style="transform: translate(0px, -45px);">
+                                    <div class="puck-core"></div>
+                                    <div class="puck-pulse"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Soundstage Positions -->
+                        <div class="spatial-quick-positions">
+                            <button class="spatial-pos-btn active" data-pos="front" onclick="window.player.setSpatialPositionPreset('front')">Front</button>
+                            <button class="spatial-pos-btn" data-pos="wide" onclick="window.player.setSpatialPositionPreset('wide')">Wide 3D</button>
+                            <button class="spatial-pos-btn" data-pos="surround" onclick="window.player.setSpatialPositionPreset('surround')">Surround</button>
+                            <button class="spatial-pos-btn" id="btn-spatial-orbit" onclick="window.player.toggleAutoOrbit()">360° Orbit</button>
+                        </div>
+                    </div>
+
+                    <!-- Spatial Controls Header & Reset -->
+                    <div class="eq-section-header" style="margin-top: 18px;">
+                        <span class="eq-section-title">Spatial Processing Parameters</span>
+                        <button class="eq-reset-btn" onclick="window.player.resetSpatialAudio()">Reset Default</button>
+                    </div>
+
+                    <!-- Sliders -->
+                    <div class="eq-sliders-container" id="spatial-sliders-container">
+                        <div class="eq-slider-group">
+                            <div class="eq-slider-header">
+                                <span class="eq-slider-label">Spatial Intensity <span class="eq-slider-freq">DSP Strength</span></span>
+                                <span class="eq-slider-value" id="spatial-val-intensity">75%</span>
+                            </div>
+                            <input type="range" class="eq-slider" id="spatial-slider-intensity" min="0" max="100" value="75">
+                        </div>
+
+                        <div class="eq-slider-group">
+                            <div class="eq-slider-header">
+                                <span class="eq-slider-label">Surround Width <span class="eq-slider-freq">Stereo Field Expansion</span></span>
+                                <span class="eq-slider-value" id="spatial-val-width">80%</span>
+                            </div>
+                            <input type="range" class="eq-slider" id="spatial-slider-width" min="0" max="100" value="80">
+                        </div>
+
+                        <div class="eq-slider-group">
+                            <div class="eq-slider-header">
+                                <span class="eq-slider-label">Distance & Room Depth <span class="eq-slider-freq">Acoustic Space</span></span>
+                                <span class="eq-slider-value" id="spatial-val-distance">40%</span>
+                            </div>
+                            <input type="range" class="eq-slider" id="spatial-slider-distance" min="0" max="100" value="40">
+                        </div>
+                    </div>
+
+                    <!-- 3D Audio Demo Card -->
+                    <div class="spatial-demo-card">
+                        <div class="demo-card-content">
+                            <div class="demo-card-icon">
+                                <i data-lucide="bike" style="width: 26px; height: 26px; color: var(--accent-color);"></i>
+                            </div>
+                            <div class="demo-card-info">
+                                <div class="demo-card-title">3D Motorcycle Flyby Demo</div>
+                                <div class="demo-card-sub">Approaches left, roars past, fades right (wear headphones)</div>
+                            </div>
+                        </div>
+                        <button id="btn-spatial-demo" class="spatial-demo-btn" onclick="window.player.toggle3DMotorcycleDemo()">
+                            <i data-lucide="play" id="spatial-demo-icon"></i>
+                            <span id="spatial-demo-text">Play 3D Demo</span>
+                        </button>
                     </div>
                 </div>
             </div>

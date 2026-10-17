@@ -19,9 +19,13 @@ import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.audiofx.AudioEffect;
 import android.media.audiofx.BassBoost;
 import android.media.audiofx.Equalizer;
+import android.media.audiofx.PresetReverb;
+import android.media.audiofx.Virtualizer;
 import org.json.JSONObject;
 
 public class AudioPlayerService extends MediaSessionService {
@@ -342,14 +346,23 @@ public class AudioPlayerService extends MediaSessionService {
         private final Context context;
         private Equalizer equalizer;
         private BassBoost bassBoost;
+        private Virtualizer virtualizer;
+        private PresetReverb presetReverb;
         private int currentSessionId = 0;
         private boolean isAvailable = false;
 
-        // Normalized slider values (0 to 100, default 50)
+        // Normalized equalizer values (0 to 100, default 50)
         private int bassValue = 50;
         private int midValue = 50;
         private int trebleValue = 50;
         private boolean isEnabled = true;
+
+        // 360 Spatial Audio settings
+        private boolean spatialEnabled = false;
+        private int spatialIntensity = 75; // 0..100
+        private int spatialWidth = 80;     // 0..100
+        private int spatialDistance = 40;  // 0..100
+        private int spatialAzimuth = 0;    // 0..360 (degrees around listener)
 
         public AudioEffectsManager(Context context, int audioSessionId) {
             this.context = context.getApplicationContext();
@@ -374,6 +387,7 @@ public class AudioPlayerService extends MediaSessionService {
             }
             if (currentSessionId == audioSessionId && isAvailable && equalizer != null) {
                 applySettings();
+                applySpatialSettings();
                 return;
             }
 
@@ -425,6 +439,47 @@ public class AudioPlayerService extends MediaSessionService {
                     bassBoost = null;
                 }
 
+                try {
+                    virtualizer = new Virtualizer(1000, audioSessionId);
+                    Log.i(TAG, "Virtualizer created on session " + audioSessionId + ": control=" + virtualizer.hasControl() + ", strengthSupported=" + virtualizer.getStrengthSupported());
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        try {
+                            boolean canBinaural = virtualizer.canVirtualize(AudioFormat.CHANNEL_OUT_STEREO, Virtualizer.VIRTUALIZATION_MODE_BINAURAL);
+                            Log.i(TAG, "Virtualizer canVirtualize BINAURAL: " + canBinaural);
+                            if (canBinaural) {
+                                virtualizer.forceVirtualizationMode(Virtualizer.VIRTUALIZATION_MODE_BINAURAL);
+                            }
+                        } catch (Exception be) {
+                            Log.w(TAG, "Virtualizer forceVirtualizationMode failed: " + be.getMessage());
+                        }
+                    }
+
+                    virtualizer.setControlStatusListener((effect, controlGranted) -> {
+                        Log.i(TAG, "Virtualizer control status changed: granted=" + controlGranted);
+                        if (controlGranted) {
+                            applySpatialSettings();
+                        }
+                    });
+                } catch (Exception e) {
+                    Log.w(TAG, "Virtualizer unsupported on session " + audioSessionId + ": " + e.getMessage());
+                    virtualizer = null;
+                }
+
+                try {
+                    presetReverb = new PresetReverb(1000, audioSessionId);
+                    Log.i(TAG, "PresetReverb created on session " + audioSessionId + ": control=" + presetReverb.hasControl());
+                    presetReverb.setControlStatusListener((effect, controlGranted) -> {
+                        Log.i(TAG, "PresetReverb control status changed: granted=" + controlGranted);
+                        if (controlGranted) {
+                            applySpatialSettings();
+                        }
+                    });
+                } catch (Exception e) {
+                    Log.w(TAG, "PresetReverb unsupported on session " + audioSessionId + ": " + e.getMessage());
+                    presetReverb = null;
+                }
+
                 equalizer.setEnabled(isEnabled);
                 if (bassBoost != null) {
                     bassBoost.setEnabled(isEnabled);
@@ -432,6 +487,7 @@ public class AudioPlayerService extends MediaSessionService {
                 isAvailable = true;
 
                 applySettings();
+                applySpatialSettings();
                 Log.i(TAG, "AudioEffects successfully attached and configured on session " + audioSessionId);
             } catch (Exception e) {
                 Log.e(TAG, "AudioEffects initialization failed on session " + audioSessionId + ": " + e.getMessage(), e);
@@ -462,6 +518,22 @@ public class AudioPlayerService extends MediaSessionService {
                     Log.w(TAG, "Error toggling effects enabled", e);
                 }
             }
+        }
+
+        public synchronized void setSpatialParams(boolean enabled, int intensity, int width, int distance, int azimuth) {
+            this.spatialEnabled = enabled;
+            this.spatialIntensity = Math.max(0, Math.min(100, intensity));
+            this.spatialWidth = Math.max(0, Math.min(100, width));
+            this.spatialDistance = Math.max(0, Math.min(100, distance));
+            this.spatialAzimuth = ((azimuth % 360) + 360) % 360;
+            savePreferences();
+            applySpatialSettings();
+        }
+
+        public synchronized void setSpatialEnabled(boolean enabled) {
+            this.spatialEnabled = enabled;
+            savePreferences();
+            applySpatialSettings();
         }
 
         private void applySettings() {
@@ -551,6 +623,49 @@ public class AudioPlayerService extends MediaSessionService {
             }
         }
 
+        private void applySpatialSettings() {
+            if (!isAvailable) {
+                Log.d(TAG, "applySpatialSettings skipped: isAvailable=false");
+                return;
+            }
+            try {
+                if (virtualizer != null) {
+                    virtualizer.setEnabled(spatialEnabled);
+                    if (spatialEnabled && virtualizer.getStrengthSupported()) {
+                        int effectiveStrength = (int) Math.round((spatialIntensity / 100.0f) * (spatialWidth / 100.0f) * 1000.0f);
+                        effectiveStrength = Math.max(0, Math.min(1000, effectiveStrength));
+                        virtualizer.setStrength((short) effectiveStrength);
+                        Log.d(TAG, "Virtualizer strength set to " + effectiveStrength);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Error applying virtualizer settings", e);
+            }
+
+            try {
+                if (presetReverb != null) {
+                    if (!spatialEnabled || spatialDistance <= 10) {
+                        presetReverb.setEnabled(false);
+                        presetReverb.setPreset(PresetReverb.PRESET_NONE);
+                    } else {
+                        presetReverb.setEnabled(true);
+                        short preset;
+                        if (spatialDistance < 40) {
+                            preset = PresetReverb.PRESET_SMALLROOM;
+                        } else if (spatialDistance < 70) {
+                            preset = PresetReverb.PRESET_MEDIUMHALL;
+                        } else {
+                            preset = PresetReverb.PRESET_LARGEHALL;
+                        }
+                        presetReverb.setPreset(preset);
+                        Log.d(TAG, "PresetReverb preset set to " + preset);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Error applying presetReverb settings", e);
+            }
+        }
+
         private static short calcGain(int sliderVal, short minLevel, short maxLevel) {
             if (sliderVal == 50) return 0;
             if (sliderVal > 50) {
@@ -585,6 +700,44 @@ public class AudioPlayerService extends MediaSessionService {
                         obj.put("bassBoostStrength", bassBoost.getRoundedStrength());
                     }
                 }
+
+                // Spatial Audio Telemetry
+                obj.put("spatialEnabled", spatialEnabled);
+                obj.put("spatialIntensity", spatialIntensity);
+                obj.put("spatialWidth", spatialWidth);
+                obj.put("spatialDistance", spatialDistance);
+                obj.put("spatialAzimuth", spatialAzimuth);
+                if (virtualizer != null) {
+                    obj.put("virtualizerSupported", virtualizer.getStrengthSupported());
+                    obj.put("virtualizerHasControl", virtualizer.hasControl());
+                    obj.put("virtualizerEnabled", virtualizer.getEnabled());
+                    if (virtualizer.getStrengthSupported()) {
+                        obj.put("virtualizerStrength", virtualizer.getRoundedStrength());
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        try {
+                            obj.put("virtualizerMode", virtualizer.getVirtualizationMode());
+                        } catch (Exception ignored) {}
+                    }
+                }
+                if (presetReverb != null) {
+                    obj.put("presetReverbHasControl", presetReverb.hasControl());
+                    obj.put("presetReverbEnabled", presetReverb.getEnabled());
+                    try {
+                        obj.put("presetReverbPreset", presetReverb.getPreset());
+                    } catch (Exception ignored) {}
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    try {
+                        AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+                        if (am != null) {
+                            android.media.Spatializer s = am.getSpatializer();
+                            obj.put("platformSpatializerAvailable", s.isAvailable());
+                            obj.put("platformSpatializerEnabled", s.isEnabled());
+                            obj.put("platformHeadTrackerAvailable", s.isHeadTrackerAvailable());
+                        }
+                    } catch (Exception ignored) {}
+                }
             } catch (Exception ignored) {}
             return obj;
         }
@@ -596,6 +749,12 @@ public class AudioPlayerService extends MediaSessionService {
                 midValue = prefs.getInt("mid", 50);
                 trebleValue = prefs.getInt("treble", 50);
                 isEnabled = prefs.getBoolean("enabled", true);
+
+                spatialEnabled = prefs.getBoolean("spatial_enabled", false);
+                spatialIntensity = prefs.getInt("spatial_intensity", 75);
+                spatialWidth = prefs.getInt("spatial_width", 80);
+                spatialDistance = prefs.getInt("spatial_distance", 40);
+                spatialAzimuth = prefs.getInt("spatial_azimuth", 0);
             } catch (Exception ignored) {}
         }
 
@@ -607,6 +766,11 @@ public class AudioPlayerService extends MediaSessionService {
                     .putInt("mid", midValue)
                     .putInt("treble", trebleValue)
                     .putBoolean("enabled", isEnabled)
+                    .putBoolean("spatial_enabled", spatialEnabled)
+                    .putInt("spatial_intensity", spatialIntensity)
+                    .putInt("spatial_width", spatialWidth)
+                    .putInt("spatial_distance", spatialDistance)
+                    .putInt("spatial_azimuth", spatialAzimuth)
                     .apply();
             } catch (Exception ignored) {}
         }
@@ -629,6 +793,14 @@ public class AudioPlayerService extends MediaSessionService {
             if (bassBoost != null) {
                 try { bassBoost.release(); } catch (Exception ignored) {}
                 bassBoost = null;
+            }
+            if (virtualizer != null) {
+                try { virtualizer.release(); } catch (Exception ignored) {}
+                virtualizer = null;
+            }
+            if (presetReverb != null) {
+                try { presetReverb.release(); } catch (Exception ignored) {}
+                presetReverb = null;
             }
             isAvailable = false;
         }

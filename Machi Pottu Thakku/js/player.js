@@ -51,6 +51,25 @@ class AudioPlayer {
             }
         } catch (e) {}
 
+        // 360 Spatial Audio state
+        this.spatialSettings = {
+            enabled: false,
+            intensity: 75,
+            width: 80,
+            distance: 40,
+            azimuth: 0,
+            autoOrbit: false
+        };
+        try {
+            const savedSpatial = localStorage.getItem('mpt_spatial_settings');
+            if (savedSpatial) {
+                const parsed = JSON.parse(savedSpatial);
+                if (parsed && typeof parsed.intensity === 'number') {
+                    this.spatialSettings = { ...this.spatialSettings, ...parsed };
+                }
+            }
+        } catch (e) {}
+
         this.initWebAudioEq();
         this.setupListeners();
         this.setupAudioEvents();
@@ -280,6 +299,54 @@ class AudioPlayer {
         this.updateRepeatUI();
         this.updateEqSlidersUI();
         this.updateEqUI();
+
+        // 360 Spatial Audio Drawer Button
+        const npSpatialBtn = document.getElementById('np-btn-spatial');
+        if (npSpatialBtn) {
+            npSpatialBtn.addEventListener('click', () => this.openSpatialDrawer());
+        }
+
+        // Spatial Audio Sliders
+        const sliderIntensity = document.getElementById('spatial-slider-intensity');
+        const sliderWidth = document.getElementById('spatial-slider-width');
+        const sliderDistance = document.getElementById('spatial-slider-distance');
+
+        let spatialThrottleTimer = null;
+        const onSpatialSliderChange = (isFinal = false) => {
+            const intensity = parseInt(sliderIntensity?.value || 75, 10);
+            const width = parseInt(sliderWidth?.value || 80, 10);
+            const distance = parseInt(sliderDistance?.value || 40, 10);
+
+            this.spatialSettings.intensity = intensity;
+            this.spatialSettings.width = width;
+            this.spatialSettings.distance = distance;
+            this.updateSpatialSlidersUI();
+            this.updateSpatialRadarUI();
+
+            if (isFinal) {
+                if (spatialThrottleTimer) { clearTimeout(spatialThrottleTimer); spatialThrottleTimer = null; }
+                this.setSpatialParams(intensity, width, distance, this.spatialSettings.azimuth);
+            } else {
+                if (!spatialThrottleTimer) {
+                    spatialThrottleTimer = setTimeout(() => {
+                        spatialThrottleTimer = null;
+                        this.setSpatialParams(this.spatialSettings.intensity, this.spatialSettings.width, this.spatialSettings.distance, this.spatialSettings.azimuth);
+                    }, 40);
+                }
+            }
+        };
+
+        [sliderIntensity, sliderWidth, sliderDistance].forEach(sl => {
+            if (sl) {
+                sl.addEventListener('input', () => onSpatialSliderChange(false));
+                sl.addEventListener('change', () => onSpatialSliderChange(true));
+            }
+        });
+
+        this.setupSpatialRadar();
+        this.updateSpatialSlidersUI();
+        this.updateSpatialRadarUI();
+        this.updateSpatialUI();
     }
 
     async seekFromClick(e, container) {
@@ -519,6 +586,11 @@ class AudioPlayer {
     }
 
     async playTrack(track, queueList = [], index = 0) {
+        if (this.isDemoRunning) {
+            this.stop3DMotorcycleDemo();
+            this.wasPlayingBeforeDemo = false;
+        }
+
         if (!track?.s3Key && track?.id) {
             let canonical = null;
             if (window.app?.musicLibrary && window.app.musicLibrary.length > 0) {
@@ -720,10 +792,16 @@ class AudioPlayer {
 
                 // Maintain next tracks in native queue
                 this.maintainNativeQueue();
+
+                // Synchronize native audio DSP effects (Equalizer + 3D Spatial Audio)
+                this.applyNativeAudioEq().catch(() => {});
+                this.applyNativeSpatialAudio().catch(() => {});
             } else {
                 this.audio.src = finalUrl;
                 await this.audio.play();
                 this.saveLastPlayedTrack(track);
+                this.applyWebAudioEq();
+                this.applyWebAudioSpatial();
             }
 
             return true;
@@ -748,6 +826,11 @@ class AudioPlayer {
     }
 
     togglePlay() {
+        if (this.isDemoRunning) {
+            this.stop3DMotorcycleDemo();
+            this.wasPlayingBeforeDemo = false;
+        }
+
         if (!this.currentTrack) return;
 
         console.log("[MPT_DIAG] togglePlay clicked for track ID:", this.currentTrack.id);
@@ -895,6 +978,7 @@ class AudioPlayer {
 
         // Re-apply equalizer settings to ensure effect session remains synchronized across transitions
         this.applyNativeAudioEq().catch(() => {});
+        this.applyNativeSpatialAudio().catch(() => {});
     }
 
     async syncFromNative() {
@@ -1428,6 +1512,10 @@ class AudioPlayer {
     // Equalizer & Audio Effects Methods
     // =========================================================================
     initWebAudioEq() {
+        this.initWebAudioDSP();
+    }
+
+    initWebAudioDSP() {
         if (Capacitor.isNativePlatform()) return;
         try {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -1439,6 +1527,7 @@ class AudioPlayer {
                     this.audioCtx = new AudioContext();
                     this.sourceNode = this.audioCtx.createMediaElementSource(this.audio);
 
+                    // Equalizer Filters
                     this.bassFilter = this.audioCtx.createBiquadFilter();
                     this.bassFilter.type = 'lowshelf';
                     this.bassFilter.frequency.value = 250;
@@ -1452,13 +1541,51 @@ class AudioPlayer {
                     this.trebleFilter.type = 'highshelf';
                     this.trebleFilter.frequency.value = 4000;
 
+                    // 3D Spatial Audio Node (HRTF Binaural Panner)
+                    this.pannerNode = this.audioCtx.createPanner();
+                    this.pannerNode.panningModel = 'HRTF';
+                    this.pannerNode.distanceModel = 'inverse';
+                    this.pannerNode.refDistance = 1;
+                    this.pannerNode.maxDistance = 100;
+                    this.pannerNode.rolloffFactor = 1.0;
+
+                    // Air Absorption Filter (High frequency rolloff with distance)
+                    this.airAbsorptionFilter = this.audioCtx.createBiquadFilter();
+                    this.airAbsorptionFilter.type = 'lowpass';
+                    this.airAbsorptionFilter.frequency.value = 20000;
+
+                    // Dry/Wet Blending Gains for Spatial processing
+                    this.spatialDryGain = this.audioCtx.createGain();
+                    this.spatialWetGain = this.audioCtx.createGain();
+
+                    // Dynamics compressor / soft limiter to prevent clipping when EQ and Spatial are both boosted
+                    this.limiterNode = this.audioCtx.createDynamicsCompressor();
+                    this.limiterNode.threshold.value = -1.0;
+                    this.limiterNode.knee.value = 10;
+                    this.limiterNode.ratio.value = 12;
+                    this.limiterNode.attack.value = 0.003;
+                    this.limiterNode.release.value = 0.25;
+
+                    // Signal Graph Wiring:
+                    // source -> bass -> mid -> treble
                     this.sourceNode.connect(this.bassFilter);
                     this.bassFilter.connect(this.midFilter);
                     this.midFilter.connect(this.trebleFilter);
-                    this.trebleFilter.connect(this.audioCtx.destination);
+
+                    // Treble splits to Dry path (straight to limiter) and Wet Spatial path
+                    this.trebleFilter.connect(this.spatialDryGain);
+                    this.spatialDryGain.connect(this.limiterNode);
+
+                    this.trebleFilter.connect(this.airAbsorptionFilter);
+                    this.airAbsorptionFilter.connect(this.spatialWetGain);
+                    this.spatialWetGain.connect(this.pannerNode);
+                    this.pannerNode.connect(this.limiterNode);
+
+                    this.limiterNode.connect(this.audioCtx.destination);
 
                     this.webAudioInitialized = true;
                     this.applyWebAudioEq();
+                    this.applyWebAudioSpatial();
                 } catch (e) {
                     console.warn("[WEB AUDIO] Init failed:", e);
                 }
@@ -1629,6 +1756,617 @@ class AudioPlayer {
         if (drawer) {
             drawer.classList.remove('active');
         }
+    }
+
+    // =========================================================================
+    // 360° Spatial Audio & 3D Surround Sound Engine
+    // =========================================================================
+    applyWebAudioSpatial() {
+        if (!this.webAudioInitialized || !this.audioCtx || !this.spatialWetGain) return;
+        try {
+            const now = this.audioCtx.currentTime;
+            if (!this.spatialSettings.enabled) {
+                this.spatialWetGain.gain.setTargetAtTime(0, now, 0.04);
+                this.spatialDryGain.gain.setTargetAtTime(1.0, now, 0.04);
+                return;
+            }
+
+            const wet = (this.spatialSettings.intensity / 100.0);
+            const dry = Math.max(0.05, 1.0 - (wet * 0.6));
+            this.spatialWetGain.gain.setTargetAtTime(wet, now, 0.04);
+            this.spatialDryGain.gain.setTargetAtTime(dry, now, 0.04);
+
+            // Calculate 3D coordinates based on azimuth angle and distance
+            const rad = (this.spatialSettings.azimuth * Math.PI) / 180.0;
+            const widthMult = 0.5 + (this.spatialSettings.width / 100.0) * 1.0;
+            const distMeters = 1.2 + (this.spatialSettings.distance / 100.0) * 6.0;
+
+            const x = Math.sin(rad) * distMeters * widthMult;
+            const z = -Math.cos(rad) * distMeters;
+
+            if (this.pannerNode.positionX) {
+                this.pannerNode.positionX.setTargetAtTime(x, now, 0.05);
+                this.pannerNode.positionY.setTargetAtTime(0, now, 0.05);
+                this.pannerNode.positionZ.setTargetAtTime(z, now, 0.05);
+            } else if (typeof this.pannerNode.setPosition === 'function') {
+                this.pannerNode.setPosition(x, 0, z);
+            }
+
+            // High frequency distance rolloff (air absorption)
+            if (this.airAbsorptionFilter) {
+                const cutoff = 20000 - (this.spatialSettings.distance / 100.0) * 13000;
+                this.airAbsorptionFilter.frequency.setTargetAtTime(cutoff, now, 0.05);
+            }
+        } catch (e) {
+            console.warn("[WEB AUDIO] Error applying spatial settings:", e);
+        }
+    }
+
+    async applyNativeSpatialAudio() {
+        if (!Capacitor.isNativePlatform()) return;
+        try {
+            await NativeAudio.setSpatialAudioParams({
+                enabled: this.spatialSettings.enabled,
+                intensity: this.spatialSettings.intensity,
+                width: this.spatialSettings.width,
+                distance: this.spatialSettings.distance,
+                azimuth: this.spatialSettings.azimuth
+            });
+        } catch (e) {
+            console.warn("[SPATIAL] Failed to set native spatial params:", e);
+        }
+    }
+
+    async setSpatialAudioEnabled(enabled) {
+        this.spatialSettings.enabled = !!enabled;
+        this.saveSpatialSettings();
+
+        if (Capacitor.isNativePlatform()) {
+            await this.applyNativeSpatialAudio();
+        } else {
+            this.applyWebAudioSpatial();
+        }
+        this.updateSpatialUI();
+    }
+
+    async setSpatialParams(intensity, width, distance, azimuth) {
+        if (typeof intensity === 'number' && !isNaN(intensity)) {
+            this.spatialSettings.intensity = Math.max(0, Math.min(100, intensity));
+        }
+        if (typeof width === 'number' && !isNaN(width)) {
+            this.spatialSettings.width = Math.max(0, Math.min(100, width));
+        }
+        if (typeof distance === 'number' && !isNaN(distance)) {
+            this.spatialSettings.distance = Math.max(0, Math.min(100, distance));
+        }
+        if (typeof azimuth === 'number' && !isNaN(azimuth)) {
+            this.spatialSettings.azimuth = ((Math.round(azimuth) % 360) + 360) % 360;
+        }
+
+        this.saveSpatialSettings();
+
+        if (Capacitor.isNativePlatform()) {
+            await this.applyNativeSpatialAudio();
+        } else {
+            this.applyWebAudioSpatial();
+        }
+        this.updateSpatialSlidersUI();
+        this.updateSpatialRadarUI();
+    }
+
+    setSpatialPositionPreset(preset) {
+        if (this.autoOrbitInterval) {
+            this.stopAutoOrbit();
+        }
+        if (preset === 'front') {
+            this.setSpatialParams(null, 80, 35, 0);
+        } else if (preset === 'wide') {
+            this.setSpatialParams(null, 100, 50, 45);
+        } else if (preset === 'surround') {
+            this.setSpatialParams(null, 90, 65, 180);
+        }
+        document.querySelectorAll('.spatial-pos-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-pos') === preset);
+        });
+    }
+
+    toggleAutoOrbit() {
+        if (this.autoOrbitInterval) {
+            this.stopAutoOrbit();
+        } else {
+            this.startAutoOrbit();
+        }
+    }
+
+    startAutoOrbit() {
+        if (this.autoOrbitInterval) clearInterval(this.autoOrbitInterval);
+        this.spatialSettings.autoOrbit = true;
+        const btn = document.getElementById('btn-spatial-orbit');
+        if (btn) btn.classList.add('active');
+
+        document.querySelectorAll('.spatial-pos-btn').forEach(b => {
+            if (b !== btn) b.classList.remove('active');
+        });
+
+        if (!this.spatialSettings.enabled) {
+            this.setSpatialAudioEnabled(true);
+        }
+
+        let angle = this.spatialSettings.azimuth || 0;
+        this.autoOrbitInterval = setInterval(() => {
+            angle = (angle + 3) % 360;
+            this.spatialSettings.azimuth = angle;
+            this.updateSpatialRadarUI();
+            if (Capacitor.isNativePlatform()) {
+                if (angle % 12 === 0) {
+                    this.applyNativeSpatialAudio();
+                }
+            } else {
+                this.applyWebAudioSpatial();
+            }
+        }, 50);
+    }
+
+    stopAutoOrbit() {
+        if (this.autoOrbitInterval) {
+            clearInterval(this.autoOrbitInterval);
+            this.autoOrbitInterval = null;
+        }
+        this.spatialSettings.autoOrbit = false;
+        const btn = document.getElementById('btn-spatial-orbit');
+        if (btn) btn.classList.remove('active');
+        this.saveSpatialSettings();
+        if (Capacitor.isNativePlatform()) {
+            this.applyNativeSpatialAudio();
+        }
+    }
+
+    resetSpatialAudio() {
+        if (this.autoOrbitInterval) this.stopAutoOrbit();
+        this.spatialSettings = {
+            enabled: true,
+            intensity: 75,
+            width: 80,
+            distance: 40,
+            azimuth: 0,
+            autoOrbit: false
+        };
+        this.saveSpatialSettings();
+        if (Capacitor.isNativePlatform()) {
+            this.applyNativeSpatialAudio();
+        } else {
+            this.applyWebAudioSpatial();
+        }
+        this.updateSpatialUI();
+        this.updateSpatialSlidersUI();
+        this.updateSpatialRadarUI();
+        this.setSpatialPositionPreset('front');
+    }
+
+    // 3D Audio Demonstration (Procedural Motorcycle Approach & Flyby)
+    async toggle3DMotorcycleDemo() {
+        if (this.isDemoRunning) {
+            this.stop3DMotorcycleDemo();
+        } else {
+            this.play3DMotorcycleDemo();
+        }
+    }
+
+    async play3DMotorcycleDemo() {
+        if (this.isDemoRunning) return;
+        this.isDemoRunning = true;
+
+        const demoBtn = document.getElementById('btn-spatial-demo');
+        const demoText = document.getElementById('spatial-demo-text');
+        const demoIcon = document.getElementById('spatial-demo-icon');
+        if (demoBtn) demoBtn.classList.add('demo-running');
+        if (demoText) demoText.textContent = 'Stop Demo';
+        if (demoIcon) demoIcon.setAttribute('data-lucide', 'square');
+        if (window.lucide) lucide.createIcons();
+
+        // If music was playing, pause it gracefully
+        this.wasPlayingBeforeDemo = false;
+        if (Capacitor.isNativePlatform() && this.nativeInitialized) {
+            try {
+                const { isPlaying } = await NativeAudio.isPlaying({ audioId: 'main' });
+                if (isPlaying) {
+                    this.wasPlayingBeforeDemo = true;
+                    await NativeAudio.pause({ audioId: 'main' });
+                    this.syncUIState(false);
+                }
+            } catch(e) {}
+        } else if (this.audio && !this.audio.paused) {
+            this.wasPlayingBeforeDemo = true;
+            this.audio.pause();
+            this.syncUIState(false);
+        }
+
+        // Initialize AudioContext for demo
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!this.demoAudioCtx) {
+            this.demoAudioCtx = new AudioContext();
+        }
+        if (this.demoAudioCtx.state === 'suspended') {
+            await this.demoAudioCtx.resume();
+        }
+
+        const ctx = this.demoAudioCtx;
+        const startTime = ctx.currentTime;
+        const duration = 9.0; // 9-second flyby sequence
+
+        // Procedural Motorcycle Audio Synthesis Graph:
+        // 1. Two harmonic oscillators simulating combustion cylinders
+        const osc1 = ctx.createOscillator();
+        const osc2 = ctx.createOscillator();
+        osc1.type = 'sawtooth';
+        osc2.type = 'triangle';
+
+        // 2. Sub-bass thump oscillator for engine rumble
+        const subOsc = ctx.createOscillator();
+        subOsc.type = 'sawtooth';
+
+        // 3. Cylinder resonance filter (exhaust body)
+        const exhaustFilter = ctx.createBiquadFilter();
+        exhaustFilter.type = 'bandpass';
+        exhaustFilter.frequency.setValueAtTime(320, startTime);
+        exhaustFilter.Q.setValueAtTime(3.2, startTime);
+
+        // 4. Air absorption distance filter
+        const airFilter = ctx.createBiquadFilter();
+        airFilter.type = 'lowpass';
+        airFilter.frequency.setValueAtTime(900, startTime);
+
+        // 5. Engine gain envelope
+        const masterGain = ctx.createGain();
+        masterGain.gain.setValueAtTime(0.001, startTime);
+
+        // 6. HRTF 3D Panner
+        const demoPanner = ctx.createPanner();
+        demoPanner.panningModel = 'HRTF';
+        demoPanner.distanceModel = 'inverse';
+        demoPanner.refDistance = 1;
+        demoPanner.maxDistance = 100;
+        demoPanner.rolloffFactor = 1.0;
+
+        // Wire nodes:
+        osc1.connect(exhaustFilter);
+        osc2.connect(exhaustFilter);
+        subOsc.connect(exhaustFilter);
+        exhaustFilter.connect(airFilter);
+        airFilter.connect(masterGain);
+        masterGain.connect(demoPanner);
+        demoPanner.connect(ctx.destination);
+
+        // Pitch & Throttle Evolution (with Doppler pitch drop)
+        osc1.frequency.setValueAtTime(54, startTime);
+        osc1.frequency.exponentialRampToValueAtTime(82, startTime + 4.2);
+        osc2.frequency.setValueAtTime(108, startTime);
+        osc2.frequency.exponentialRampToValueAtTime(164, startTime + 4.2);
+        subOsc.frequency.setValueAtTime(27, startTime);
+        subOsc.frequency.exponentialRampToValueAtTime(41, startTime + 4.2);
+
+        // Doppler pitch drop at flyby
+        osc1.frequency.setValueAtTime(82, startTime + 4.3);
+        osc1.frequency.exponentialRampToValueAtTime(50, startTime + 4.8);
+        osc2.frequency.setValueAtTime(164, startTime + 4.3);
+        osc2.frequency.exponentialRampToValueAtTime(100, startTime + 4.8);
+        subOsc.frequency.setValueAtTime(41, startTime + 4.3);
+        subOsc.frequency.exponentialRampToValueAtTime(25, startTime + 4.8);
+
+        // Accelerate into distance
+        osc1.frequency.exponentialRampToValueAtTime(42, startTime + duration);
+        osc2.frequency.exponentialRampToValueAtTime(84, startTime + duration);
+        subOsc.frequency.exponentialRampToValueAtTime(21, startTime + duration);
+
+        // Volume Envelope
+        masterGain.gain.setValueAtTime(0.01, startTime);
+        masterGain.gain.exponentialRampToValueAtTime(0.4, startTime + 3.0);
+        masterGain.gain.linearRampToValueAtTime(0.85, startTime + 4.4);
+        masterGain.gain.setValueAtTime(0.85, startTime + 4.6);
+        masterGain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+        // Air Absorption Filter
+        airFilter.frequency.setValueAtTime(900, startTime);
+        airFilter.frequency.exponentialRampToValueAtTime(10000, startTime + 4.4);
+        airFilter.frequency.exponentialRampToValueAtTime(700, startTime + duration);
+
+        // Start Oscillators
+        osc1.start(startTime);
+        osc2.start(startTime);
+        subOsc.start(startTime);
+        osc1.stop(startTime + duration);
+        osc2.stop(startTime + duration);
+        subOsc.stop(startTime + duration);
+
+        this.currentDemoNodes = {
+            osc1,
+            osc2,
+            subOsc,
+            exhaustFilter,
+            airFilter,
+            masterGain,
+            demoPanner
+        };
+
+        // Real-Time 3D Trajectory Animation across 360° Space:
+        const animStart = performance.now();
+        const updatePanner = () => {
+            if (!this.isDemoRunning) return;
+            const elapsed = (performance.now() - animStart) / 1000.0;
+            const progress = Math.min(1.0, elapsed / duration);
+
+            let x, z;
+            if (progress < 0.48) {
+                const t = progress / 0.48;
+                x = -22.0 + t * 20.5;
+                z = -22.0 + t * 22.0;
+            } else {
+                const t = (progress - 0.48) / 0.52;
+                x = -1.5 + t * 23.5;
+                z = 0.0 + t * 25.0;
+            }
+
+            if (demoPanner.positionX) {
+                demoPanner.positionX.setValueAtTime(x, ctx.currentTime);
+                demoPanner.positionY.setValueAtTime(0, ctx.currentTime);
+                demoPanner.positionZ.setValueAtTime(z, ctx.currentTime);
+            } else if (typeof demoPanner.setPosition === 'function') {
+                demoPanner.setPosition(x, 0, z);
+            }
+
+            // Update UI Radar Widget dynamically
+            const rad = Math.atan2(x, -z);
+            let deg = Math.round((rad * 180.0) / Math.PI);
+            deg = ((deg % 360) + 360) % 360;
+            const dist = Math.min(1.0, Math.sqrt(x * x + z * z) / 25.0);
+
+            const radar = document.getElementById('spatial-radar');
+            const puck = document.getElementById('spatial-puck');
+            const lbl = document.getElementById('spatial-azimuth-label');
+            if (radar && puck) {
+                const radius = (radar.offsetWidth / 2) - 16;
+                const px = Math.sin(rad) * dist * radius;
+                const py = -Math.cos(rad) * dist * radius;
+                puck.style.transform = `translate(${px}px, ${py}px)`;
+            }
+            if (lbl) {
+                lbl.textContent = `3D DEMO: ${deg}° • ${Math.round(dist * 100)}% DIST`;
+            }
+
+            if (progress < 1.0) {
+                this.demoAnimFrame = requestAnimationFrame(updatePanner);
+            } else {
+                this.stop3DMotorcycleDemo();
+            }
+        };
+
+        this.demoAnimFrame = requestAnimationFrame(updatePanner);
+    }
+
+    stop3DMotorcycleDemo() {
+        if (!this.isDemoRunning) return;
+        this.isDemoRunning = false;
+        if (this.demoAnimFrame) {
+            cancelAnimationFrame(this.demoAnimFrame);
+            this.demoAnimFrame = null;
+        }
+
+        if (this.currentDemoNodes) {
+            try {
+                this.currentDemoNodes.masterGain.gain.setValueAtTime(0, this.demoAudioCtx?.currentTime || 0);
+                try { this.currentDemoNodes.osc1.stop(); } catch(e) {}
+                try { this.currentDemoNodes.osc2.stop(); } catch(e) {}
+                try { this.currentDemoNodes.subOsc.stop(); } catch(e) {}
+                try { this.currentDemoNodes.osc1.disconnect(); } catch(e) {}
+                try { this.currentDemoNodes.osc2.disconnect(); } catch(e) {}
+                try { this.currentDemoNodes.subOsc.disconnect(); } catch(e) {}
+                try { this.currentDemoNodes.exhaustFilter.disconnect(); } catch(e) {}
+                try { this.currentDemoNodes.airFilter.disconnect(); } catch(e) {}
+                try { this.currentDemoNodes.masterGain.disconnect(); } catch(e) {}
+                try { this.currentDemoNodes.demoPanner.disconnect(); } catch(e) {}
+            } catch(e) {}
+            this.currentDemoNodes = null;
+        }
+
+        const demoBtn = document.getElementById('btn-spatial-demo');
+        const demoText = document.getElementById('spatial-demo-text');
+        const demoIcon = document.getElementById('spatial-demo-icon');
+        if (demoBtn) demoBtn.classList.remove('demo-running');
+        if (demoText) demoText.textContent = 'Play 3D Demo';
+        if (demoIcon) demoIcon.setAttribute('data-lucide', 'play');
+        if (window.lucide) lucide.createIcons();
+
+        // Restore saved radar position
+        this.updateSpatialRadarUI();
+
+        // Restore music playback if was playing
+        if (this.wasPlayingBeforeDemo) {
+            this.wasPlayingBeforeDemo = false;
+            if (Capacitor.isNativePlatform() && this.nativeInitialized) {
+                NativeAudio.play({ audioId: 'main' }).then(() => this.syncUIState(true)).catch(() => {});
+            } else if (this.audio && this.audio.src) {
+                this.audio.play().then(() => this.syncUIState(true)).catch(() => {});
+            }
+        }
+    }
+
+    // Radar Touch / Pointer Interaction
+    setupSpatialRadar() {
+        const radar = document.getElementById('spatial-radar');
+        if (!radar) return;
+
+        let isInteracting = false;
+
+        const updateFromPointer = (clientX, clientY) => {
+            const rect = radar.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            const dx = clientX - centerX;
+            const dy = clientY - centerY;
+
+            const rad = Math.atan2(dx, -dy);
+            let deg = Math.round((rad * 180.0) / Math.PI);
+            deg = ((deg % 360) + 360) % 360;
+
+            const radius = rect.width / 2;
+            const rawDist = Math.sqrt(dx * dx + dy * dy) / radius;
+            const distPercent = Math.max(10, Math.min(100, Math.round(rawDist * 100)));
+
+            if (this.autoOrbitInterval) {
+                this.stopAutoOrbit();
+            }
+
+            document.querySelectorAll('.spatial-pos-btn').forEach(b => b.classList.remove('active'));
+
+            this.setSpatialParams(null, null, distPercent, deg);
+        };
+
+        radar.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            isInteracting = true;
+            try { radar.setPointerCapture(e.pointerId); } catch(err) {}
+            updateFromPointer(e.clientX, e.clientY);
+        });
+
+        radar.addEventListener('pointermove', (e) => {
+            if (!isInteracting) return;
+            e.preventDefault();
+            updateFromPointer(e.clientX, e.clientY);
+        });
+
+        const endPointer = (e) => {
+            if (!isInteracting) return;
+            isInteracting = false;
+            try {
+                if (radar.hasPointerCapture(e.pointerId)) {
+                    radar.releasePointerCapture(e.pointerId);
+                }
+            } catch(err) {}
+            this.saveSpatialSettings();
+            if (Capacitor.isNativePlatform()) {
+                this.applyNativeSpatialAudio();
+            }
+        };
+
+        radar.addEventListener('pointerup', endPointer);
+        radar.addEventListener('pointercancel', endPointer);
+    }
+
+    updateSpatialSlidersUI() {
+        const sliderIntensity = document.getElementById('spatial-slider-intensity');
+        const sliderWidth = document.getElementById('spatial-slider-width');
+        const sliderDist = document.getElementById('spatial-slider-distance');
+
+        const valIntensity = document.getElementById('spatial-val-intensity');
+        const valWidth = document.getElementById('spatial-val-width');
+        const valDist = document.getElementById('spatial-val-distance');
+
+        if (sliderIntensity) sliderIntensity.value = this.spatialSettings.intensity;
+        if (sliderWidth) sliderWidth.value = this.spatialSettings.width;
+        if (sliderDist) sliderDist.value = this.spatialSettings.distance;
+
+        if (valIntensity) valIntensity.textContent = `${this.spatialSettings.intensity}%`;
+        if (valWidth) valWidth.textContent = `${this.spatialSettings.width}%`;
+        if (valDist) valDist.textContent = `${this.spatialSettings.distance}%`;
+    }
+
+    updateSpatialRadarUI() {
+        const radar = document.getElementById('spatial-radar');
+        const puck = document.getElementById('spatial-puck');
+        const label = document.getElementById('spatial-azimuth-label');
+
+        if (radar && puck) {
+            const rad = (this.spatialSettings.azimuth * Math.PI) / 180.0;
+            const distRatio = Math.max(0.15, Math.min(1.0, this.spatialSettings.distance / 100.0));
+            const maxRadius = (radar.offsetWidth / 2) - 16;
+
+            const px = Math.sin(rad) * distRatio * maxRadius;
+            const py = -Math.cos(rad) * distRatio * maxRadius;
+            puck.style.transform = `translate(${px}px, ${py}px)`;
+        }
+
+        if (label) {
+            let directionStr = 'FRONT';
+            const az = this.spatialSettings.azimuth;
+            if (az >= 337.5 || az < 22.5) directionStr = 'FRONT';
+            else if (az >= 22.5 && az < 67.5) directionStr = 'FRONT-RIGHT';
+            else if (az >= 67.5 && az < 112.5) directionStr = 'RIGHT';
+            else if (az >= 112.5 && az < 157.5) directionStr = 'REAR-RIGHT';
+            else if (az >= 157.5 && az < 202.5) directionStr = 'BACK';
+            else if (az >= 202.5 && az < 247.5) directionStr = 'REAR-LEFT';
+            else if (az >= 247.5 && az < 292.5) directionStr = 'LEFT';
+            else if (az >= 292.5 && az < 337.5) directionStr = 'FRONT-LEFT';
+
+            label.textContent = `${directionStr} ${az}° • ${this.spatialSettings.distance}% DISTANCE`;
+        }
+    }
+
+    updateSpatialUI() {
+        const toggle = document.getElementById('spatial-toggle-enabled');
+        if (toggle) toggle.checked = this.spatialSettings.enabled;
+
+        const radarCard = document.getElementById('spatial-radar-card');
+        if (radarCard) {
+            radarCard.classList.toggle('spatial-disabled', !this.spatialSettings.enabled);
+        }
+
+        const slidersContainer = document.getElementById('spatial-sliders-container');
+        if (slidersContainer) {
+            slidersContainer.classList.toggle('spatial-disabled', !this.spatialSettings.enabled);
+        }
+
+        const label = document.getElementById('spatial-status-label');
+        if (label) {
+            if (!this.spatialSettings.enabled) {
+                label.textContent = '360° Spatial Audio Disabled (Stereo Bypass)';
+            } else if (Capacitor.isNativePlatform()) {
+                label.textContent = 'Native DSP: Headphone Virtualizer & Reverb';
+            } else {
+                label.textContent = 'Web Audio: HRTF 360° Positional Engine';
+            }
+        }
+    }
+
+    openSpatialDrawer() {
+        const drawer = document.getElementById('drawer-spatial');
+        if (drawer) {
+            drawer.classList.add('active');
+            this.updateSpatialSlidersUI();
+            this.updateSpatialRadarUI();
+            this.updateSpatialUI();
+            if (Capacitor.isNativePlatform()) {
+                NativeAudio.getSpatialAudioStatus({}).then(status => {
+                    const label = document.getElementById('spatial-status-label');
+                    if (label && this.spatialSettings.enabled && status) {
+                        const virtStr = status.virtualizerSupported ? 'Headphone Virtualizer' : 'Spatializer';
+                        const ctrlStr = status.virtualizerHasControl ? 'Hardware DSP Active' : 'Attached';
+                        label.textContent = `Native DSP: ${virtStr} (${ctrlStr})`;
+                    }
+                }).catch(() => {});
+            }
+        }
+    }
+
+    closeSpatialDrawer() {
+        if (this.isDemoRunning) {
+            this.stop3DMotorcycleDemo();
+        }
+        const drawer = document.getElementById('drawer-spatial');
+        if (drawer) {
+            drawer.classList.remove('active');
+        }
+    }
+
+    saveSpatialSettings() {
+        try {
+            localStorage.setItem('mpt_spatial_settings', JSON.stringify({
+                enabled: this.spatialSettings.enabled,
+                intensity: this.spatialSettings.intensity,
+                width: this.spatialSettings.width,
+                distance: this.spatialSettings.distance,
+                azimuth: this.spatialSettings.azimuth
+            }));
+        } catch(e) {}
     }
 }
 
