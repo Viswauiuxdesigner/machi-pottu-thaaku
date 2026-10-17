@@ -623,7 +623,7 @@ class App {
             <div class="last-played-card" data-id="${track.id}">
                 ${artworkHtml}
                 <div class="last-played-details">
-                    <div class="last-played-badge"><i data-lucide="clock" style="width: 12px; height: 12px;"></i> Resume Playing</div>
+                    <div class="last-played-badge"><i data-lucide="clock" style="width: 12px; height: 12px;"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></i> Resume Playing</div>
                     <div class="last-played-title">${track.title || 'Unknown Title'}</div>
                     <div class="last-played-meta">
                         <span class="last-played-artist">${track.artist || 'Unknown Artist'}</span>
@@ -631,7 +631,7 @@ class App {
                     </div>
                 </div>
                 <button class="last-played-play-btn" aria-label="Play Collection">
-                    <i data-lucide="play" style="width: 20px; height: 20px; margin-left: 2px;" fill="currentColor"></i>
+                    <i data-lucide="play" style="width: 20px; height: 20px; margin-left: 2px;" fill="currentColor"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg></i>
                 </button>
             </div>
         `;

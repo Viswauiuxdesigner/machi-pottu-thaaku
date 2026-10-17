@@ -475,6 +475,19 @@ public class AudioPlayerPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setEqualizerEnabled(PluginCall call) {
+        try {
+            boolean enabled = call.getBoolean("enabled", true);
+            AudioPlayerService.AudioEffectsManager fx = getAudioEffectsManager();
+            fx.setEnabled(enabled);
+            JSObject res = toJSObject(fx.getStatus());
+            call.resolve(res);
+        } catch (Exception ex) {
+            call.reject("There was an issue toggling equalizer enabled state.", ex);
+        }
+    }
+
+    @PluginMethod
     public void getEqualizerStatus(PluginCall call) {
         try {
             AudioPlayerService.AudioEffectsManager fx = getAudioEffectsManager();

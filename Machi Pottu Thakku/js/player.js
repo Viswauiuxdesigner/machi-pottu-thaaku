@@ -34,8 +34,9 @@ class AudioPlayer {
         // Repeat mode state ('off' | 'all' | 'one')
         this.repeatMode = localStorage.getItem('mpt_repeat_mode') || 'off';
 
-        // Equalizer state (Bass, Mid, Treble 0..100)
+        // Equalizer state (Bass, Mid, Treble 0..100) & Enabled flag
         this.eqSettings = { bass: 50, mid: 50, treble: 50 };
+        this.eqEnabled = true;
         try {
             const savedEq = localStorage.getItem('mpt_eq_settings');
             if (savedEq) {
@@ -43,6 +44,10 @@ class AudioPlayer {
                 if (parsed && typeof parsed.bass === 'number') {
                     this.eqSettings = parsed;
                 }
+            }
+            const savedEnabled = localStorage.getItem('mpt_eq_enabled');
+            if (savedEnabled !== null) {
+                this.eqEnabled = (savedEnabled === 'true');
             }
         } catch (e) {}
 
@@ -238,6 +243,8 @@ class AudioPlayer {
             const b = parseInt(sliderBass?.value || 50, 10);
             const m = parseInt(sliderMid?.value || 50, 10);
             const t = parseInt(sliderTreble?.value || 50, 10);
+            // Clear active preset buttons to indicate custom EQ curve
+            document.querySelectorAll('.eq-preset-btn').forEach(btn => btn.classList.remove('active'));
             this.setEqualizerBands(b, m, t);
         };
         [sliderBass, sliderMid, sliderTreble].forEach(sl => {
@@ -258,6 +265,7 @@ class AudioPlayer {
         // Initialize UI states
         this.updateRepeatUI();
         this.updateEqSlidersUI();
+        this.updateEqUI();
     }
 
     async seekFromClick(e, container) {
@@ -1179,7 +1187,7 @@ class AudioPlayer {
         } catch (e) {}
 
         if (Capacitor.isNativePlatform() && this.nativeInitialized) {
-            const modeInt = mode === 'one' ? 2 : (mode === 'all' ? 1 : 0);
+            const modeInt = mode === 'one' ? 1 : (mode === 'all' ? 2 : 0);
             try {
                 await NativeAudio.setRepeatMode({ audioId: 'main', mode: modeInt });
             } catch (e) {
@@ -1448,7 +1456,7 @@ class AudioPlayer {
     applyWebAudioEq() {
         if (!this.webAudioInitialized || !this.bassFilter) return;
         try {
-            const mapGain = (val) => ((val - 50) / 50) * 12; // -12dB to +12dB
+            const mapGain = (val) => this.eqEnabled ? (((val - 50) / 50) * 12) : 0; // -12dB to +12dB or 0 when disabled
             this.bassFilter.gain.value = mapGain(this.eqSettings.bass);
             this.midFilter.gain.value = mapGain(this.eqSettings.mid);
             this.trebleFilter.gain.value = mapGain(this.eqSettings.treble);
@@ -1463,9 +1471,34 @@ class AudioPlayer {
                 mid: this.eqSettings.mid,
                 treble: this.eqSettings.treble
             });
+            await NativeAudio.setEqualizerEnabled({
+                enabled: this.eqEnabled
+            });
         } catch (e) {
-            console.warn("[EQ] Failed to set native equalizer bands:", e);
+            console.warn("[EQ] Failed to set native equalizer settings:", e);
         }
+    }
+
+    async setEqualizerEnabled(enabled) {
+        this.eqEnabled = !!enabled;
+        try {
+            localStorage.setItem('mpt_eq_enabled', this.eqEnabled ? 'true' : 'false');
+        } catch (e) {}
+
+        if (Capacitor.isNativePlatform()) {
+            try {
+                await NativeAudio.setEqualizerEnabled({ enabled: this.eqEnabled });
+            } catch (e) {
+                console.warn("[EQ] Failed to set native equalizer enabled:", e);
+            }
+        } else {
+            this.applyWebAudioEq();
+        }
+        this.updateEqUI();
+    }
+
+    resetEqualizer() {
+        this.applyEqualizerPreset('flat');
     }
 
     async setEqualizerBands(bass, mid, treble) {
@@ -1491,7 +1524,9 @@ class AudioPlayer {
             flat: { bass: 50, mid: 50, treble: 50 },
             bass: { bass: 85, mid: 50, treble: 45 },
             vocal: { bass: 40, mid: 80, treble: 60 },
-            treble: { bass: 45, mid: 55, treble: 85 }
+            pop: { bass: 65, mid: 60, treble: 70 },
+            rock: { bass: 80, mid: 40, treble: 75 },
+            classical: { bass: 50, mid: 70, treble: 65 }
         };
         const p = presets[presetName] || presets.flat;
         this.setEqualizerBands(p.bass, p.mid, p.treble);
@@ -1519,18 +1554,49 @@ class AudioPlayer {
         if (valTreble) valTreble.textContent = `${this.eqSettings.treble}%`;
     }
 
+    updateEqUI() {
+        const toggle = document.getElementById('eq-toggle-enabled');
+        if (toggle) toggle.checked = this.eqEnabled;
+
+        const slidersContainer = document.getElementById('eq-sliders-container');
+        if (slidersContainer) {
+            slidersContainer.classList.toggle('eq-disabled', !this.eqEnabled);
+        }
+
+        const presetsRow = document.querySelector('.eq-presets-row');
+        if (presetsRow) {
+            presetsRow.classList.toggle('eq-disabled', !this.eqEnabled);
+        }
+
+        const label = document.getElementById('eq-status-label');
+        if (label) {
+            if (!this.eqEnabled) {
+                label.textContent = 'Equalizer Bypassed (Off)';
+            } else if (Capacitor.isNativePlatform()) {
+                label.textContent = 'Native Hardware Equalizer Active';
+            } else {
+                label.textContent = 'Web Audio DSP Active';
+            }
+        }
+    }
+
     openEqDrawer() {
         const drawer = document.getElementById('drawer-eq');
         if (drawer) {
             drawer.classList.add('active');
             this.updateEqSlidersUI();
+            this.updateEqUI();
             if (Capacitor.isNativePlatform()) {
                 NativeAudio.getEqualizerStatus({}).then(status => {
                     const label = document.getElementById('eq-status-label');
                     if (label) {
-                        label.textContent = status && status.isAvailable
-                            ? 'Native Hardware Equalizer Active'
-                            : 'Audio Effects (DSP Bridge)';
+                        if (!this.eqEnabled) {
+                            label.textContent = 'Equalizer Bypassed (Off)';
+                        } else if (status && status.isAvailable) {
+                            label.textContent = `Hardware DSP Active (Session ${status.sessionId || 'Ready'})`;
+                        } else {
+                            label.textContent = 'DSP Initializing / Waiting for Playback';
+                        }
                     }
                 }).catch(() => {});
             }

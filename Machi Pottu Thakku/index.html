@@ -70,11 +70,11 @@
                     </div>
                     <section class="quick-access">
                         <div class="quick-card card-downloads" onclick="document.querySelector('.nav-item[data-page=\'downloads\']').click()">
-                            <i data-lucide="download" class="quick-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></i>
+                            <i data-lucide="download" class="quick-icon"><svg xmlns="http://www.w3.org/2000/svg" width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></i>
                             <div class="quick-title">Downloads</div>
                         </div>
                         <div class="quick-card card-favourites" onclick="document.querySelector('.nav-item[data-page=\'favorites\']').click()">
-                            <i data-lucide="heart" class="quick-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg></i>
+                            <i data-lucide="heart" class="quick-icon"><svg xmlns="http://www.w3.org/2000/svg" width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg></i>
                             <div class="quick-title">Favourites</div>
                         </div>
                     </section>
@@ -327,25 +327,39 @@
                         <div class="drawer-title"><i data-lucide="sliders" style="width: 20px; height: 20px; margin-right: 8px; color: var(--accent-color);"></i> Equalizer</div>
                         <div class="drawer-subtitle" id="eq-status-label">Native DSP Audio Effects</div>
                     </div>
-                    <button class="icon-btn" onclick="window.player.closeEqDrawer()" aria-label="Close Equalizer">
-                        <i data-lucide="x"></i>
-                    </button>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <label class="eq-toggle-wrap" title="Toggle Equalizer">
+                            <input type="checkbox" id="eq-toggle-enabled" checked onchange="window.player.setEqualizerEnabled(this.checked)">
+                            <span class="eq-toggle-track"><span class="eq-toggle-thumb"></span></span>
+                        </label>
+                        <button class="icon-btn" onclick="window.player.closeEqDrawer()" aria-label="Close Equalizer">
+                            <i data-lucide="x"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="drawer-body">
+                    <!-- Presets Header -->
+                    <div class="eq-section-header">
+                        <span class="eq-section-title">Presets</span>
+                        <button class="eq-reset-btn" onclick="window.player.resetEqualizer()">Reset Flat</button>
+                    </div>
+
                     <!-- Presets -->
                     <div class="eq-presets-row">
                         <button class="eq-preset-btn active" data-preset="flat">Flat</button>
                         <button class="eq-preset-btn" data-preset="bass">Bass Boost</button>
                         <button class="eq-preset-btn" data-preset="vocal">Vocal</button>
-                        <button class="eq-preset-btn" data-preset="treble">Treble Boost</button>
+                        <button class="eq-preset-btn" data-preset="pop">Pop</button>
+                        <button class="eq-preset-btn" data-preset="rock">Rock</button>
+                        <button class="eq-preset-btn" data-preset="classical">Classical</button>
                     </div>
 
                     <!-- Sliders -->
-                    <div class="eq-sliders-container">
+                    <div class="eq-sliders-container" id="eq-sliders-container">
                         <div class="eq-slider-group">
                             <div class="eq-slider-header">
-                                <span class="eq-slider-label">Bass</span>
+                                <span class="eq-slider-label">Bass <span class="eq-slider-freq">60Hz</span></span>
                                 <span class="eq-slider-value" id="eq-val-bass">50%</span>
                             </div>
                             <input type="range" class="eq-slider" id="eq-slider-bass" min="0" max="100" value="50">
@@ -353,7 +367,7 @@
 
                         <div class="eq-slider-group">
                             <div class="eq-slider-header">
-                                <span class="eq-slider-label">Midrange</span>
+                                <span class="eq-slider-label">Midrange <span class="eq-slider-freq">1kHz</span></span>
                                 <span class="eq-slider-value" id="eq-val-mid">50%</span>
                             </div>
                             <input type="range" class="eq-slider" id="eq-slider-mid" min="0" max="100" value="50">
@@ -361,7 +375,7 @@
 
                         <div class="eq-slider-group">
                             <div class="eq-slider-header">
-                                <span class="eq-slider-label">Treble</span>
+                                <span class="eq-slider-label">Treble <span class="eq-slider-freq">14kHz</span></span>
                                 <span class="eq-slider-value" id="eq-val-treble">50%</span>
                             </div>
                             <input type="range" class="eq-slider" id="eq-slider-treble" min="0" max="100" value="50">

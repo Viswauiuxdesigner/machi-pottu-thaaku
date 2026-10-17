@@ -14,6 +14,7 @@ import androidx.media3.common.C;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
 import android.content.Context;
@@ -29,12 +30,20 @@ public class AudioPlayerService extends MediaSessionService {
     private MediaSession mediaSession = null;
     private static AudioPlayerService instance = null;
     private AudioEffectsManager audioEffectsManager = null;
+    private ExoPlayer exoPlayer = null;
 
     public static AudioPlayerService getInstance() {
         return instance;
     }
 
     public AudioEffectsManager getAudioEffectsManager() {
+        if (audioEffectsManager != null && exoPlayer != null) {
+            int sid = exoPlayer.getAudioSessionId();
+            if (sid > 0 && (!audioEffectsManager.isAvailable() || audioEffectsManager.getCurrentSessionId() != sid)) {
+                Log.i(TAG, "Attaching audio effects in getAudioEffectsManager to session: " + sid);
+                audioEffectsManager.attachToSession(sid);
+            }
+        }
         return audioEffectsManager;
     }
 
@@ -70,7 +79,7 @@ public class AudioPlayerService extends MediaSessionService {
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
         );
 
-        ExoPlayer exoPlayer = new ExoPlayer.Builder(this)
+        exoPlayer = new ExoPlayer.Builder(this)
             .setAudioAttributes(
                 new AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -83,6 +92,40 @@ public class AudioPlayerService extends MediaSessionService {
         exoPlayer.setPlayWhenReady(false);
 
         audioEffectsManager = new AudioEffectsManager(this, exoPlayer.getAudioSessionId());
+
+        exoPlayer.addAnalyticsListener(new AnalyticsListener() {
+            @Override
+            public void onAudioSessionIdChanged(EventTime eventTime, int audioSessionId) {
+                Log.i(TAG, "AnalyticsListener onAudioSessionIdChanged: " + audioSessionId);
+                if (audioEffectsManager != null && audioSessionId > 0) {
+                    audioEffectsManager.attachToSession(audioSessionId);
+                }
+            }
+        });
+
+        exoPlayer.addListener(new androidx.media3.common.Player.Listener() {
+            @Override
+            public void onPlaybackStateChanged(int playbackState) {
+                if (audioEffectsManager != null && exoPlayer != null) {
+                    int sid = exoPlayer.getAudioSessionId();
+                    if (sid > 0 && (!audioEffectsManager.isAvailable() || audioEffectsManager.getCurrentSessionId() != sid)) {
+                        Log.i(TAG, "Attaching audio effects on playback state change to session: " + sid);
+                        audioEffectsManager.attachToSession(sid);
+                    }
+                }
+            }
+
+            @Override
+            public void onIsPlayingChanged(boolean isPlaying) {
+                if (isPlaying && audioEffectsManager != null && exoPlayer != null) {
+                    int sid = exoPlayer.getAudioSessionId();
+                    if (sid > 0 && (!audioEffectsManager.isAvailable() || audioEffectsManager.getCurrentSessionId() != sid)) {
+                        Log.i(TAG, "Attaching audio effects on isPlaying change to session: " + sid);
+                        audioEffectsManager.attachToSession(sid);
+                    }
+                }
+            }
+        });
         
         androidx.media3.common.ForwardingPlayer player = new androidx.media3.common.ForwardingPlayer(exoPlayer) {
             @Override
@@ -253,6 +296,10 @@ public class AudioPlayerService extends MediaSessionService {
             audioEffectsManager = null;
         }
 
+        if (exoPlayer != null) {
+            exoPlayer = null;
+        }
+
         if (instance == this) {
             instance = null;
         }
@@ -297,12 +344,20 @@ public class AudioPlayerService extends MediaSessionService {
             attachToSession(audioSessionId);
         }
 
+        public synchronized boolean isAvailable() {
+            return isAvailable;
+        }
+
+        public synchronized int getCurrentSessionId() {
+            return currentSessionId;
+        }
+
         public synchronized void attachToSession(int audioSessionId) {
             if (audioSessionId <= 0) {
                 Log.w(TAG, "Cannot attach to invalid audio session ID: " + audioSessionId);
                 return;
             }
-            if (currentSessionId == audioSessionId && isAvailable) {
+            if (currentSessionId == audioSessionId && isAvailable && equalizer != null) {
                 return;
             }
 
@@ -311,10 +366,17 @@ public class AudioPlayerService extends MediaSessionService {
 
             try {
                 equalizer = new Equalizer(0, audioSessionId);
-                bassBoost = new BassBoost(0, audioSessionId);
+                try {
+                    bassBoost = new BassBoost(0, audioSessionId);
+                } catch (Exception e) {
+                    Log.w(TAG, "BassBoost unsupported on device: " + e.getMessage());
+                    bassBoost = null;
+                }
 
                 equalizer.setEnabled(isEnabled);
-                bassBoost.setEnabled(isEnabled);
+                if (bassBoost != null) {
+                    bassBoost.setEnabled(isEnabled);
+                }
                 isAvailable = true;
 
                 applySettings();
@@ -341,6 +403,9 @@ public class AudioPlayerService extends MediaSessionService {
                 try {
                     if (equalizer != null) equalizer.setEnabled(enabled);
                     if (bassBoost != null) bassBoost.setEnabled(enabled);
+                    if (enabled) {
+                        applySettings();
+                    }
                 } catch (Exception e) {
                     Log.w(TAG, "Error toggling effects enabled", e);
                 }
@@ -362,20 +427,25 @@ public class AudioPlayerService extends MediaSessionService {
                 short midLevel = (short) (minLevel + (maxLevel - minLevel) * (midValue / 100.0f));
                 short trebleLevel = (short) (minLevel + (maxLevel - minLevel) * (trebleValue / 100.0f));
 
-                // Band 0 is Bass
-                equalizer.setBandLevel((short) 0, bassLevel);
+                for (short i = 0; i < numBands; i++) {
+                    if (i == 0) {
+                        equalizer.setBandLevel(i, bassLevel);
+                    } else if (i == numBands - 1) {
+                        equalizer.setBandLevel(i, trebleLevel);
+                    } else if (i < numBands / 2) {
+                        short lowMid = (short) ((bassLevel + midLevel) / 2);
+                        equalizer.setBandLevel(i, lowMid);
+                    } else if (i == numBands / 2) {
+                        equalizer.setBandLevel(i, midLevel);
+                    } else {
+                        short highMid = (short) ((midLevel + trebleLevel) / 2);
+                        equalizer.setBandLevel(i, highMid);
+                    }
+                }
 
-                // Middle band is Mid
-                short midBand = (short) (numBands / 2);
-                equalizer.setBandLevel(midBand, midLevel);
-
-                // Highest band is Treble
-                short trebleBand = (short) (numBands - 1);
-                equalizer.setBandLevel(trebleBand, trebleLevel);
-
-                // BassBoost effect: strength 0..1000
+                // BassBoost effect: strength 0..1000 (neutral 0 at <=50%, up to 1000 at 100%)
                 if (bassBoost != null && bassBoost.getStrengthSupported()) {
-                    short boostStrength = (short) (bassValue * 10); // 0 to 1000
+                    short boostStrength = (short) Math.min(1000, Math.max(0, (bassValue - 50) * 20));
                     bassBoost.setStrength(boostStrength);
                 }
             } catch (Exception e) {
@@ -391,6 +461,7 @@ public class AudioPlayerService extends MediaSessionService {
                 obj.put("bass", bassValue);
                 obj.put("mid", midValue);
                 obj.put("treble", trebleValue);
+                obj.put("sessionId", currentSessionId);
                 if (isAvailable && equalizer != null) {
                     obj.put("numBands", equalizer.getNumberOfBands());
                 }

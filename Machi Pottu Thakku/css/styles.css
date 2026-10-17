@@ -356,6 +356,17 @@ body {
     background: rgba(255,107,0,0.1);
     padding: 8px;
     border-radius: 50%;
+    width: 27px;
+    height: 27px;
+    box-sizing: content-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.quick-icon svg {
+    width: 27px;
+    height: 27px;
 }
 
 .quick-title {
@@ -1956,18 +1967,100 @@ body {
 }
 
 /* Equalizer Styles */
+/* Equalizer Toggle Switch */
+.eq-toggle-wrap {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+.eq-toggle-wrap input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.eq-toggle-track {
+    position: absolute;
+    inset: 0;
+    background-color: rgba(255, 255, 255, 0.16);
+    border-radius: 24px;
+    transition: background-color 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.eq-toggle-thumb {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: #ffffff;
+    border-radius: 50%;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+
+.eq-toggle-wrap input:checked + .eq-toggle-track {
+    background-color: var(--accent-color);
+}
+
+.eq-toggle-wrap input:checked + .eq-toggle-track .eq-toggle-thumb {
+    transform: translateX(20px);
+}
+
+/* EQ Presets Header & Reset */
+.eq-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.eq-section-title {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--secondary-text);
+}
+
+.eq-reset-btn {
+    background: transparent;
+    border: none;
+    color: var(--accent-color);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: opacity 0.2s;
+}
+
+.eq-reset-btn:hover {
+    opacity: 0.8;
+}
+
 .eq-presets-row {
     display: flex;
     gap: 8px;
     margin-bottom: 24px;
     overflow-x: auto;
     padding-bottom: 4px;
+    scrollbar-width: none;
+}
+
+.eq-presets-row::-webkit-scrollbar {
+    display: none;
 }
 
 .eq-preset-btn {
-    flex: 1;
-    min-width: 70px;
-    padding: 8px 12px;
+    flex: 0 0 auto;
+    min-width: 68px;
+    padding: 8px 14px;
     border-radius: 20px;
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: rgba(255, 255, 255, 0.04);
@@ -1990,6 +2083,13 @@ body {
     display: flex;
     flex-direction: column;
     gap: 20px;
+    transition: opacity 0.25s ease;
+}
+
+.eq-sliders-container.eq-disabled,
+.eq-presets-row.eq-disabled {
+    opacity: 0.38;
+    pointer-events: none;
 }
 
 .eq-slider-group {
@@ -2008,6 +2108,15 @@ body {
     font-size: 14px;
     font-weight: 600;
     color: var(--primary-text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.eq-slider-freq {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--secondary-text);
 }
 
 .eq-slider-value {
