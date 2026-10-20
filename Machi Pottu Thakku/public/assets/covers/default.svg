@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1c1c24" />
+      <stop offset="50%" stop-color="#121216" />
+      <stop offset="100%" stop-color="#09090b" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff8c00" />
+      <stop offset="100%" stop-color="#ff5500" />
+    </linearGradient>
+  </defs>
+  <rect width="500" height="500" fill="url(#bg)" />
+  <circle cx="250" cy="220" r="120" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="4" />
+  <circle cx="250" cy="220" r="80" fill="none" stroke="rgba(255,107,0,0.15)" stroke-width="2" />
+  <!-- Headphones icon -->
+  <path d="M170 220 A 80 80 0 0 1 330 220 V 270 A 20 20 0 0 1 310 290 H 295 A 15 15 0 0 1 280 275 V 235 A 15 15 0 0 1 295 220 H 310" fill="none" stroke="url(#accent)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M190 220 H 205 A 15 15 0 0 1 220 235 V 275 A 15 15 0 0 1 205 290 H 190 A 20 20 0 0 1 170 270 V 220" fill="none" stroke="url(#accent)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="250" y="370" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle" letter-spacing="1">MACHI POTTU THAAKU</text>
+  <text x="250" y="405" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="14" font-weight="500" fill="#888899" text-anchor="middle" letter-spacing="3">ORIGINAL SOUNDTRACK</text>
+</svg>

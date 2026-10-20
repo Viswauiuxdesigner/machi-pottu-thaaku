@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a192f" />
+      <stop offset="50%" stop-color="#0d2346" />
+      <stop offset="100%" stop-color="#050d1a" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f2fe" />
+      <stop offset="100%" stop-color="#4facfe" />
+    </linearGradient>
+  </defs>
+  <rect width="500" height="500" fill="url(#bg)" />
+  <circle cx="250" cy="210" r="110" fill="none" stroke="rgba(0,242,254,0.12)" stroke-width="3" />
+  <!-- Musical notes -->
+  <path d="M210 240 V160 L300 140 V220 M210 180 L300 160" fill="none" stroke="url(#accent)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="190" cy="245" rx="25" ry="18" fill="url(#accent)"/>
+  <ellipse cx="280" cy="225" rx="25" ry="18" fill="url(#accent)"/>
+  <text x="250" y="370" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="24" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="2">TAMIL MELODIES</text>
+  <text x="250" y="405" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="14" font-weight="600" fill="#00f2fe" text-anchor="middle" letter-spacing="3">SOULFUL TUNES</text>
+</svg>

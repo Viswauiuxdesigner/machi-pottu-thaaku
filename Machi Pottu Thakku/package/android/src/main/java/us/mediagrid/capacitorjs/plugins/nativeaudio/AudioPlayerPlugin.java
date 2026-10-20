@@ -18,11 +18,24 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import org.json.JSONException;
+import org.json.JSONObject;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import java.util.HashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import android.net.nsd.NsdManager;
+import android.net.nsd.NsdServiceInfo;
+import android.net.wifi.WifiManager;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import us.mediagrid.capacitorjs.plugins.nativeaudio.exceptions.DestroyNotAllowedException;
 
 @CapacitorPlugin(name = "AudioPlayer")
@@ -37,6 +50,20 @@ public class AudioPlayerPlugin extends Plugin {
     private AudioSources audioSources = new AudioSources();
     private HashMap<String, String> appOnStartCallbackIds = new HashMap<>();
     private HashMap<String, String> appOnStopCallbackIds = new HashMap<>();
+
+    // --- Local Wi-Fi Native Transport State ---
+    private static final String SERVICE_TYPE = "_machisync._tcp";
+    private ServerSocket localServerSocket;
+    private Socket activeLocalSocket;
+    private BufferedWriter localSocketWriter;
+    private NsdManager nsdManager;
+    private NsdManager.RegistrationListener localRegistrationListener;
+    private NsdManager.DiscoveryListener localDiscoveryListener;
+    private WifiManager.MulticastLock multicastLock;
+    private String activeLocalRoomCode;
+    private String localRole; // "HOST" | "RECEIVER"
+    private volatile boolean isLocalTransportRunning = false;
+    private volatile boolean isLocalConnecting = false;
 
     @Override
     public void load() {
@@ -78,6 +105,11 @@ public class AudioPlayerPlugin extends Plugin {
                 call.getBoolean("isBackgroundMusic", false),
                 call.getBoolean("loop", false)
             );
+
+            String initialTrackId = call.getString("trackId");
+            if (initialTrackId != null && !initialTrackId.isEmpty()) {
+                audioSource.trackId = initialTrackId;
+            }
 
             if (audioSources.count() == 0 && !audioSource.useForNotification) {
                 throw new RuntimeException(
@@ -223,14 +255,427 @@ public class AudioPlayerPlugin extends Plugin {
             }
 
             AudioSource audioSource = audioSources.get(audioId(call));
+            String newSource = call.getString("source");
+            String trackId = call.getString("trackId");
 
             postToLooper("changeAudioSource", call, () -> {
-                audioSource.changeAudioSource(call.getString("source"));
+                audioSource.changeAudioSource(newSource, trackId);
 
                 call.resolve();
             });
         } catch (Exception ex) {
             call.reject("There was an issue changing the audio source.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setQueue(PluginCall call) {
+        try {
+            if (!audioSourceExists("setQueue", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            com.getcapacitor.JSArray itemsArray = call.getArray("items");
+            int startIndex = call.getInt("startIndex", 0);
+            String endpoint = call.getString("endpoint");
+
+            if (itemsArray == null || itemsArray.length() == 0) {
+                call.reject("items array is required and must not be empty");
+                return;
+            }
+
+            java.util.List<AudioSource.QueueItem> queueItems = new java.util.ArrayList<>();
+            for (int i = 0; i < itemsArray.length(); i++) {
+                JSONObject rawObj = itemsArray.getJSONObject(i);
+                JSObject itemObj = toJSObject(rawObj);
+                if (itemObj != null) {
+                    queueItems.add(new AudioSource.QueueItem(
+                        itemObj.getString("source"),
+                        itemObj.getString("trackId"),
+                        itemObj.getString("friendlyTitle"),
+                        itemObj.getString("artistName"),
+                        itemObj.getString("albumTitle"),
+                        itemObj.getString("artworkSource"),
+                        itemObj.getString("s3Key"),
+                        itemObj.optLong("urlFetchedAt", 0L),
+                        itemObj.optBoolean("isOffline", false)
+                    ));
+                }
+            }
+
+            postToLooper("setQueue", call, () -> {
+                audioSource.setQueue(queueItems, startIndex, endpoint);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting the queue.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void addQueueItems(PluginCall call) {
+        try {
+            if (!audioSourceExists("addQueueItems", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            com.getcapacitor.JSArray itemsArray = call.getArray("items");
+
+            if (itemsArray == null || itemsArray.length() == 0) {
+                call.resolve();
+                return;
+            }
+
+            java.util.List<AudioSource.QueueItem> queueItems = new java.util.ArrayList<>();
+            for (int i = 0; i < itemsArray.length(); i++) {
+                JSONObject rawObj = itemsArray.getJSONObject(i);
+                JSObject itemObj = toJSObject(rawObj);
+                if (itemObj != null) {
+                    queueItems.add(new AudioSource.QueueItem(
+                        itemObj.getString("source"),
+                        itemObj.getString("trackId"),
+                        itemObj.getString("friendlyTitle"),
+                        itemObj.getString("artistName"),
+                        itemObj.getString("albumTitle"),
+                        itemObj.getString("artworkSource"),
+                        itemObj.getString("s3Key"),
+                        itemObj.optLong("urlFetchedAt", 0L),
+                        itemObj.optBoolean("isOffline", false)
+                    ));
+                }
+            }
+
+            postToLooper("addQueueItems", call, () -> {
+                audioSource.addQueueItems(queueItems);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue adding queue items.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void playNext(PluginCall call) {
+        try {
+            if (!audioSourceExists("playNext", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            com.getcapacitor.JSObject rawObj = call.getObject("item");
+            if (rawObj == null) {
+                call.reject("item object is required");
+                return;
+            }
+            AudioSource.QueueItem item = new AudioSource.QueueItem(
+                rawObj.getString("source"),
+                rawObj.getString("trackId"),
+                rawObj.getString("friendlyTitle"),
+                rawObj.getString("artistName"),
+                rawObj.getString("albumTitle"),
+                rawObj.getString("artworkSource"),
+                rawObj.getString("s3Key"),
+                rawObj.optLong("urlFetchedAt", 0L),
+                rawObj.optBoolean("isOffline", false)
+            );
+
+            postToLooper("playNext", call, () -> {
+                audioSource.playNext(item);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue inserting playNext track.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void removeQueueItem(PluginCall call) {
+        try {
+            if (!audioSourceExists("removeQueueItem", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            String queueItemUid = call.getString("queueItemUid");
+            if (queueItemUid == null || queueItemUid.isEmpty()) {
+                call.reject("queueItemUid is required");
+                return;
+            }
+
+            postToLooper("removeQueueItem", call, () -> {
+                audioSource.removeQueueItem(queueItemUid);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue removing queue item.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setRepeatMode(PluginCall call) {
+        try {
+            if (!audioSourceExists("setRepeatMode", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            int mode = call.getInt("mode", 0);
+
+            postToLooper("setRepeatMode", call, () -> {
+                audioSource.setRepeatMode(mode);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting repeat mode.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getRepeatMode(PluginCall call) {
+        try {
+            if (!audioSourceExists("getRepeatMode", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            JSObject ret = new JSObject();
+            ret.put("mode", audioSource.getRepeatMode());
+            call.resolve(ret);
+        } catch (Exception ex) {
+            call.reject("There was an issue getting repeat mode.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getQueue(PluginCall call) {
+        try {
+            if (!audioSourceExists("getQueue", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            java.util.List<AudioSource.QueueItem> list = audioSource.getMasterPlaylist();
+            com.getcapacitor.JSArray arr = new com.getcapacitor.JSArray();
+            synchronized (list) {
+                for (AudioSource.QueueItem item : list) {
+                    JSObject obj = new JSObject();
+                    obj.put("queueItemUid", item.queueItemUid);
+                    obj.put("trackId", item.trackId);
+                    obj.put("friendlyTitle", item.friendlyTitle);
+                    obj.put("artistName", item.artistName);
+                    obj.put("albumTitle", item.albumTitle);
+                    obj.put("artworkSource", item.artworkSource);
+                    obj.put("source", item.source);
+                    obj.put("isOffline", item.isOffline);
+                    arr.put(obj);
+                }
+            }
+            JSObject res = new JSObject();
+            res.put("queue", arr);
+            res.put("currentIndex", audioSource.getCurrentMasterIndex());
+            res.put("currentQueueItemUid", audioSource.getCurrentQueueItemUid());
+            call.resolve(res);
+        } catch (Exception ex) {
+            call.reject("There was an issue getting the queue.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setEqualizerBands(PluginCall call) {
+        try {
+            int bass = call.getInt("bass", 50);
+            int mid = call.getInt("mid", 50);
+            int treble = call.getInt("treble", 50);
+
+            postToLooper("setEqualizerBands", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    boolean enabled = call.hasOption("enabled") ? call.getBoolean("enabled", true) : true;
+                    if (proc != null) {
+                        proc.setEqualizerParams(enabled, bass, mid, treble);
+                        proc.savePreferences(getContext());
+                        call.resolve(toJSObject(proc.getEqualizerStatus()));
+                    } else {
+                        JSObject obj = new JSObject();
+                        obj.put("isAvailable", true);
+                        obj.put("enabled", enabled);
+                        obj.put("bass", bass);
+                        obj.put("mid", mid);
+                        obj.put("treble", treble);
+                        call.resolve(obj);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error setting equalizer bands", ex);
+                    call.reject("There was an issue setting equalizer bands: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting equalizer bands.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setEqualizerEnabled(PluginCall call) {
+        try {
+            boolean enabled = call.getBoolean("enabled", true);
+            postToLooper("setEqualizerEnabled", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    if (proc != null) {
+                        proc.setEqualizerEnabled(enabled);
+                        proc.savePreferences(getContext());
+                        call.resolve(toJSObject(proc.getEqualizerStatus()));
+                    } else {
+                        JSObject obj = new JSObject();
+                        obj.put("isAvailable", true);
+                        obj.put("enabled", enabled);
+                        call.resolve(obj);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error toggling equalizer enabled state", ex);
+                    call.reject("There was an issue toggling equalizer enabled state: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue toggling equalizer enabled state.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getEqualizerStatus(PluginCall call) {
+        try {
+            postToLooper("getEqualizerStatus", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    if (proc != null) {
+                        call.resolve(toJSObject(proc.getEqualizerStatus()));
+                    } else {
+                        JSObject obj = new JSObject();
+                        obj.put("isAvailable", true);
+                        obj.put("enabled", true);
+                        call.resolve(obj);
+                    }
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error getting equalizer status", ex);
+                    call.reject("There was an issue getting equalizer status: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue getting equalizer status.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setSpatialAudioParams(PluginCall call) {
+        try {
+            boolean enabled = call.getBoolean("enabled", false);
+            int intensity = call.getInt("intensity", 75);
+            int width = call.getInt("width", 80);
+            int distance = call.getInt("distance", 40);
+            int azimuth = call.getInt("azimuth", 0);
+            boolean autoOrbit = call.hasOption("autoOrbit") ? call.getBoolean("autoOrbit", false) : false;
+
+            postToLooper("setSpatialAudioParams", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    if (proc != null) {
+                        proc.setAutoOrbit(autoOrbit);
+                        proc.setParams(enabled, intensity, width, distance, azimuth);
+                        proc.savePreferences(getContext());
+                    }
+                    JSONObject status = (proc != null) ? proc.getStatus() : new JSONObject();
+                    call.resolve(toJSObject(status));
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error setting spatial audio params", ex);
+                    call.reject("There was an issue setting spatial audio params: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue setting spatial audio params.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void setSpatialAudioEnabled(PluginCall call) {
+        try {
+            boolean enabled = call.getBoolean("enabled", false);
+            postToLooper("setSpatialAudioEnabled", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    if (proc != null) {
+                        proc.setEnabled(enabled);
+                        proc.savePreferences(getContext());
+                    }
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    if (fx != null) {
+                        fx.setSpatialEnabled(enabled);
+                    }
+                    JSONObject status = (proc != null) ? proc.getStatus() : (fx != null ? fx.getStatus() : new JSONObject());
+                    call.resolve(toJSObject(status));
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error toggling spatial audio enabled state", ex);
+                    call.reject("There was an issue toggling spatial audio enabled state: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue toggling spatial audio enabled state.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void getSpatialAudioStatus(PluginCall call) {
+        try {
+            postToLooper("getSpatialAudioStatus", call, () -> {
+                try {
+                    AudioPlayerService service = AudioPlayerService.getInstance();
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
+                    JSONObject status = (proc != null) ? proc.getStatus() : (fx != null ? fx.getStatus() : new JSONObject());
+                    call.resolve(toJSObject(status));
+                } catch (Exception ex) {
+                    Log.e(TAG, "Error getting spatial audio status", ex);
+                    call.reject("There was an issue getting spatial audio status: " + ex.getMessage(), ex);
+                }
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue getting spatial audio status.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void queueNext(PluginCall call) {
+        try {
+            if (!audioSourceExists("queueNext", call)) {
+                return;
+            }
+
+            AudioSource audioSource = audioSources.get(audioId(call));
+            String nextSource = call.getString("source");
+            String nextTrackId = call.getString("trackId");
+            String expectedCurrentTrackId = call.getString("expectedCurrentTrackId");
+            boolean isOffline = call.getBoolean("isOffline", false);
+            AudioMetadata nextMetadata = new AudioMetadata(
+                call.getString("albumTitle"),
+                call.getString("artistName"),
+                call.getString("friendlyTitle"),
+                call.getString("artworkSource"),
+                null,
+                null
+            );
+
+            postToLooper("queueNext", call, () -> {
+                audioSource.queueNext(nextSource, nextMetadata, nextTrackId, expectedCurrentTrackId, isOffline);
+                call.resolve();
+            });
+        } catch (Exception ex) {
+            call.reject("There was an issue queuing the next track.", ex);
         }
     }
 
@@ -242,6 +687,7 @@ public class AudioPlayerPlugin extends Plugin {
             }
 
             AudioSource audioSource = audioSources.get(audioId(call));
+
 
             postToLooper("changeMetadata", call, () -> {
                 audioSource.changeMetadata(
@@ -361,10 +807,13 @@ public class AudioPlayerPlugin extends Plugin {
 
             postToLooper("seek", call, () -> {
                 Double doubleTime = call.getDouble("timeInSeconds");
-                Integer intTime = call.getInt("timeInSeconds");
-                long timeInSeconds = doubleTime != null ? Math.round(doubleTime) : (intTime != null ? intTime.longValue() : 0L);
-
-                audioSources.get(audioId(call)).seek(timeInSeconds);
+                if (doubleTime != null) {
+                    audioSources.get(audioId(call)).seek(doubleTime.doubleValue());
+                } else {
+                    Integer intTime = call.getInt("timeInSeconds");
+                    long timeInSeconds = intTime != null ? intTime.longValue() : 0L;
+                    audioSources.get(audioId(call)).seek(timeInSeconds);
+                }
 
                 call.resolve();
             });
@@ -564,6 +1013,7 @@ public class AudioPlayerPlugin extends Plugin {
     protected void handleOnDestroy() {
         Log.i(TAG, "Handling onDestroy");
 
+        cleanupLocalTransport();
         releaseMediaController();
         executorService.shutdownNow();
 
@@ -719,5 +1169,527 @@ public class AudioPlayerPlugin extends Plugin {
 
     public void emitAudioEndEvent() {
         notifyListeners("nativeAudioEnd", new JSObject());
+    }
+
+    public void emitTrackTransitionEvent(JSObject data) {
+        notifyListeners("nativeTrackTransition", data != null ? data : new JSObject());
+    }
+
+    public void emitPlaybackStatusChangeEvent(JSObject data) {
+        notifyListeners("playbackStatusChange", data != null ? data : new JSObject());
+    }
+
+    private JSObject toJSObject(JSONObject obj) throws JSONException {
+        if (obj == null) {
+            return null;
+        }
+        if (obj instanceof JSObject) {
+            return (JSObject) obj;
+        }
+        return new JSObject(obj.toString());
+    }
+
+    // =========================================================================
+    // LOCAL WI-FI OFFLINE TRANSPORT (Android NSD + Direct TCP Socket)
+    // =========================================================================
+
+    private void acquireMulticastLock() {
+        try {
+            if (multicastLock == null) {
+                WifiManager wifi = (WifiManager) getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wifi != null) {
+                    multicastLock = wifi.createMulticastLock("MachiSyncMulticastLock");
+                    multicastLock.setReferenceCounted(true);
+                }
+            }
+            if (multicastLock != null && !multicastLock.isHeld()) {
+                multicastLock.acquire();
+                Log.d(TAG, "[LOCAL_WIFI] Acquired MulticastLock for NSD");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "[LOCAL_WIFI] Could not acquire MulticastLock: " + e.getMessage());
+        }
+    }
+
+    private void releaseMulticastLock() {
+        try {
+            if (multicastLock != null && multicastLock.isHeld()) {
+                multicastLock.release();
+                Log.d(TAG, "[LOCAL_WIFI] Released MulticastLock");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "[LOCAL_WIFI] Error releasing MulticastLock: " + e.getMessage());
+        }
+    }
+
+    private synchronized void cleanupLocalTransport() {
+        isLocalTransportRunning = false;
+        isLocalConnecting = false;
+        activeLocalRoomCode = null;
+        localRole = null;
+
+        if (nsdManager != null && localRegistrationListener != null) {
+            try {
+                nsdManager.unregisterService(localRegistrationListener);
+                Log.d(TAG, "[LOCAL_WIFI] Unregistered NSD service");
+            } catch (Exception e) {
+                Log.w(TAG, "[LOCAL_WIFI] Error unregistering NSD service: " + e.getMessage());
+            }
+            localRegistrationListener = null;
+        }
+
+        if (nsdManager != null && localDiscoveryListener != null) {
+            try {
+                nsdManager.stopServiceDiscovery(localDiscoveryListener);
+                Log.d(TAG, "[LOCAL_WIFI] Stopped NSD discovery");
+            } catch (Exception e) {
+                Log.w(TAG, "[LOCAL_WIFI] Error stopping NSD discovery: " + e.getMessage());
+            }
+            localDiscoveryListener = null;
+        }
+
+        if (localSocketWriter != null) {
+            try { localSocketWriter.close(); } catch (Exception ignored) {}
+            localSocketWriter = null;
+        }
+
+        if (activeLocalSocket != null) {
+            try { activeLocalSocket.close(); } catch (Exception ignored) {}
+            activeLocalSocket = null;
+        }
+
+        if (localServerSocket != null) {
+            try { localServerSocket.close(); } catch (Exception ignored) {}
+            localServerSocket = null;
+        }
+
+        releaseMulticastLock();
+    }
+
+    @PluginMethod
+    public void isLocalTransportAvailable(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("available", true);
+        ret.put("platform", "android");
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void startLocalHost(PluginCall call) {
+        String roomCode = call.getString("roomCode");
+        if (roomCode == null || roomCode.trim().isEmpty()) {
+            call.reject("roomCode is required to start local host");
+            return;
+        }
+
+        executorService.execute(() -> {
+            try {
+                cleanupLocalTransport();
+                isLocalTransportRunning = true;
+                activeLocalRoomCode = roomCode.trim();
+                localRole = "HOST";
+
+                acquireMulticastLock();
+
+                // 1. Create ServerSocket on ephemeral port
+                localServerSocket = new ServerSocket(0);
+                int port = localServerSocket.getLocalPort();
+                Log.i(TAG, "[LOCAL_WIFI] Host ServerSocket opened on port: " + port);
+
+                // 2. Register with Android NSD
+                nsdManager = (NsdManager) getContext().getSystemService(Context.NSD_SERVICE);
+                NsdServiceInfo serviceInfo = new NsdServiceInfo();
+                String serviceName = "MachiSync_" + activeLocalRoomCode + "_" + port;
+                serviceInfo.setServiceName(serviceName);
+                serviceInfo.setServiceType(SERVICE_TYPE);
+                serviceInfo.setPort(port);
+
+                localRegistrationListener = new NsdManager.RegistrationListener() {
+                    @Override
+                    public void onServiceRegistered(NsdServiceInfo nsdServiceInfo) {
+                        Log.i(TAG, "[LOCAL_WIFI] NSD Service registered: " + nsdServiceInfo.getServiceName());
+                        JSObject statusObj = new JSObject();
+                        statusObj.put("status", "WAITING");
+                        statusObj.put("role", "HOST");
+                        statusObj.put("serviceName", nsdServiceInfo.getServiceName());
+                        statusObj.put("port", port);
+                        notifyListeners("localTransportStatus", statusObj);
+                    }
+
+                    @Override
+                    public void onRegistrationFailed(NsdServiceInfo nsdServiceInfo, int errorCode) {
+                        Log.e(TAG, "[LOCAL_WIFI] NSD registration failed with error: " + errorCode);
+                        JSObject statusObj = new JSObject();
+                        statusObj.put("status", "ERROR");
+                        statusObj.put("message", "NSD registration failed: code " + errorCode);
+                        notifyListeners("localTransportStatus", statusObj);
+                    }
+
+                    @Override
+                    public void onServiceUnregistered(NsdServiceInfo nsdServiceInfo) {
+                        Log.i(TAG, "[LOCAL_WIFI] NSD Service unregistered");
+                    }
+
+                    @Override
+                    public void onUnregistrationFailed(NsdServiceInfo nsdServiceInfo, int errorCode) {
+                        Log.w(TAG, "[LOCAL_WIFI] NSD unregistration failed: " + errorCode);
+                    }
+                };
+
+                nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, localRegistrationListener);
+
+                // 3. Start listening for incoming client connection on background thread
+                executorService.execute(() -> {
+                    while (isLocalTransportRunning && localServerSocket != null && !localServerSocket.isClosed()) {
+                        try {
+                            Log.i(TAG, "[LOCAL_WIFI] Host waiting for client accept...");
+                            Socket client = localServerSocket.accept();
+                            client.setTcpNoDelay(true);
+
+                            if (!isLocalTransportRunning) {
+                                try { client.close(); } catch (Exception ignored) {}
+                                break;
+                            }
+
+                            handleConnectedClient(client);
+                        } catch (Exception e) {
+                            if (isLocalTransportRunning && localServerSocket != null && !localServerSocket.isClosed()) {
+                                Log.e(TAG, "[LOCAL_WIFI] ServerSocket accept error: " + e.getMessage());
+                            }
+                        }
+                    }
+                });
+
+                JSObject res = new JSObject();
+                res.put("success", true);
+                res.put("port", port);
+                call.resolve(res);
+
+            } catch (Exception e) {
+                Log.e(TAG, "[LOCAL_WIFI] Error starting local host: " + e.getMessage(), e);
+                cleanupLocalTransport();
+                call.reject("Failed to start local host: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    private void handleConnectedClient(Socket client) {
+        executorService.execute(() -> {
+            try {
+                Log.i(TAG, "[LOCAL_WIFI] Incoming client connected from " + client.getRemoteSocketAddress());
+                BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
+                BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(client.getOutputStream(), StandardCharsets.UTF_8));
+
+                // Read authentication handshake line
+                String authLine = reader.readLine();
+                if (authLine == null) {
+                    client.close();
+                    return;
+                }
+
+                JSONObject authJson = new JSONObject(authLine);
+                String clientCode = authJson.optString("roomCode");
+                if (!activeLocalRoomCode.equals(clientCode)) {
+                    Log.w(TAG, "[LOCAL_WIFI] Client room code mismatch: got " + clientCode + ", expected " + activeLocalRoomCode);
+                    JSONObject failResp = new JSONObject();
+                    failResp.put("type", "AUTH_FAIL");
+                    failResp.put("reason", "Room code mismatch");
+                    writer.write(failResp.toString() + "\n");
+                    writer.flush();
+                    client.close();
+                    return;
+                }
+
+                // Authenticated successfully!
+                JSONObject okResp = new JSONObject();
+                okResp.put("type", "AUTH_OK");
+                okResp.put("role", "HOST");
+                writer.write(okResp.toString() + "\n");
+                writer.flush();
+
+                synchronized (this) {
+                    if (activeLocalSocket != null && !activeLocalSocket.isClosed()) {
+                        try { activeLocalSocket.close(); } catch (Exception ignored) {}
+                    }
+                    activeLocalSocket = client;
+                    localSocketWriter = writer;
+                }
+
+                JSObject statusObj = new JSObject();
+                statusObj.put("status", "CONNECTED");
+                statusObj.put("role", "HOST");
+                statusObj.put("remoteAddress", client.getRemoteSocketAddress().toString());
+                notifyListeners("localTransportStatus", statusObj);
+
+                // Message read loop
+                listenToSocketMessages(reader);
+
+            } catch (Exception e) {
+                if (isLocalTransportRunning) {
+                    Log.e(TAG, "[LOCAL_WIFI] ServerSocket client error: " + e.getMessage());
+                    JSObject statusObj = new JSObject();
+                    statusObj.put("status", "DISCONNECTED");
+                    statusObj.put("role", "HOST");
+                    statusObj.put("message", e.getMessage());
+                    notifyListeners("localTransportStatus", statusObj);
+                }
+            }
+        });
+    }
+
+    @PluginMethod
+    public void startLocalReceiver(PluginCall call) {
+        String roomCode = call.getString("roomCode");
+        if (roomCode == null || roomCode.trim().isEmpty()) {
+            call.reject("roomCode is required to join local room");
+            return;
+        }
+
+        executorService.execute(() -> {
+            try {
+                cleanupLocalTransport();
+                isLocalTransportRunning = true;
+                isLocalConnecting = false;
+                activeLocalRoomCode = roomCode.trim();
+                localRole = "RECEIVER";
+
+                acquireMulticastLock();
+
+                nsdManager = (NsdManager) getContext().getSystemService(Context.NSD_SERVICE);
+
+                JSObject connectingObj = new JSObject();
+                connectingObj.put("status", "CONNECTING");
+                connectingObj.put("role", "RECEIVER");
+                connectingObj.put("message", "Discovering host on local Wi-Fi...");
+                notifyListeners("localTransportStatus", connectingObj);
+
+                localDiscoveryListener = new NsdManager.DiscoveryListener() {
+                    @Override
+                    public void onStartDiscoveryFailed(String serviceType, int errorCode) {
+                        Log.e(TAG, "[LOCAL_WIFI] Discovery failed to start: " + errorCode);
+                        JSObject statusObj = new JSObject();
+                        statusObj.put("status", "ERROR");
+                        statusObj.put("message", "Discovery failed: code " + errorCode);
+                        notifyListeners("localTransportStatus", statusObj);
+                    }
+
+                    @Override
+                    public void onStopDiscoveryFailed(String serviceType, int errorCode) {
+                        Log.w(TAG, "[LOCAL_WIFI] Stop discovery failed: " + errorCode);
+                    }
+
+                    @Override
+                    public void onDiscoveryStarted(String serviceType) {
+                        Log.i(TAG, "[LOCAL_WIFI] NSD Discovery started for type: " + serviceType);
+                    }
+
+                    @Override
+                    public void onDiscoveryStopped(String serviceType) {
+                        Log.i(TAG, "[LOCAL_WIFI] NSD Discovery stopped");
+                    }
+
+                    @Override
+                    public void onServiceFound(NsdServiceInfo serviceInfo) {
+                        Log.i(TAG, "[LOCAL_WIFI] Service found: " + serviceInfo.getServiceName());
+                        String name = serviceInfo.getServiceName();
+                        if (name != null && activeLocalRoomCode != null && name.contains(activeLocalRoomCode) && !isLocalConnecting) {
+                            isLocalConnecting = true;
+                            Log.i(TAG, "[LOCAL_WIFI] Matching service found: " + name + ". Resolving...");
+
+                            try {
+                                nsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
+                                    @Override
+                                    public void onResolveFailed(NsdServiceInfo nsdServiceInfo, int errorCode) {
+                                        Log.e(TAG, "[LOCAL_WIFI] Resolve failed: " + errorCode);
+                                        isLocalConnecting = false;
+                                    }
+
+                                    @Override
+                                    public void onServiceResolved(NsdServiceInfo resolvedService) {
+                                        if (resolvedService == null || resolvedService.getHost() == null) {
+                                            Log.w(TAG, "[LOCAL_WIFI] Resolved service or host is null");
+                                            isLocalConnecting = false;
+                                            return;
+                                        }
+                                        Log.i(TAG, "[LOCAL_WIFI] Service resolved: " + resolvedService.getHost() + ":" + resolvedService.getPort());
+                                        connectToHost(resolvedService.getHost().getHostAddress(), resolvedService.getPort());
+                                    }
+                                });
+                            } catch (Exception ex) {
+                                Log.e(TAG, "[LOCAL_WIFI] Error calling resolveService: " + ex.getMessage());
+                                isLocalConnecting = false;
+                            }
+                        }
+                    }
+
+                    @Override
+                    public void onServiceLost(NsdServiceInfo serviceInfo) {
+                        Log.w(TAG, "[LOCAL_WIFI] Service lost: " + serviceInfo.getServiceName());
+                    }
+                };
+
+                nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, localDiscoveryListener);
+
+                // Hotspot DHCP Gateway fallback check: If on a Wi-Fi Hotspot without mDNS routing
+                executorService.execute(() -> {
+                    try {
+                        Thread.sleep(4000);
+                        if (isLocalTransportRunning && activeLocalSocket == null && !isLocalConnecting) {
+                            WifiManager wifi = (WifiManager) getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                            if (wifi != null) {
+                                android.net.DhcpInfo dhcp = wifi.getDhcpInfo();
+                                if (dhcp != null && dhcp.gateway != 0) {
+                                    int g = dhcp.gateway;
+                                    String gatewayIp = String.format(java.util.Locale.US, "%d.%d.%d.%d", (g & 0xff), (g >> 8 & 0xff), (g >> 16 & 0xff), (g >> 24 & 0xff));
+                                    Log.i(TAG, "[LOCAL_WIFI] Probing Hotspot DHCP gateway IP: " + gatewayIp);
+                                }
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                });
+
+                JSObject res = new JSObject();
+                res.put("success", true);
+                call.resolve(res);
+
+            } catch (Exception e) {
+                Log.e(TAG, "[LOCAL_WIFI] Error starting receiver: " + e.getMessage(), e);
+                cleanupLocalTransport();
+                call.reject("Failed to start local receiver: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    private void connectToHost(String hostAddress, int port) {
+        executorService.execute(() -> {
+            try {
+                Log.i(TAG, "[LOCAL_WIFI] Connecting to host at " + hostAddress + ":" + port);
+                Socket socket = new Socket(hostAddress, port);
+                socket.setTcpNoDelay(true);
+
+                BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+                BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
+
+                // Send authentication handshake
+                JSONObject authReq = new JSONObject();
+                authReq.put("type", "AUTH_JOIN");
+                authReq.put("roomCode", activeLocalRoomCode);
+                writer.write(authReq.toString() + "\n");
+                writer.flush();
+
+                // Wait for AUTH_OK
+                String responseLine = reader.readLine();
+                if (responseLine == null) {
+                    socket.close();
+                    throw new IOException("Host closed connection during authentication");
+                }
+
+                JSONObject respJson = new JSONObject(responseLine);
+                if (!"AUTH_OK".equals(respJson.optString("type"))) {
+                    socket.close();
+                    throw new IOException("Authentication rejected by host: " + respJson.optString("reason"));
+                }
+
+                Log.i(TAG, "[LOCAL_WIFI] Successfully authenticated with Host!");
+                isLocalConnecting = false;
+                synchronized (this) {
+                    activeLocalSocket = socket;
+                    localSocketWriter = writer;
+                }
+
+                JSObject statusObj = new JSObject();
+                statusObj.put("status", "CONNECTED");
+                statusObj.put("role", "RECEIVER");
+                statusObj.put("host", hostAddress);
+                statusObj.put("port", port);
+                notifyListeners("localTransportStatus", statusObj);
+
+                // Stop discovery once connected
+                if (nsdManager != null && localDiscoveryListener != null) {
+                    try {
+                        nsdManager.stopServiceDiscovery(localDiscoveryListener);
+                        localDiscoveryListener = null;
+                    } catch (Exception ignored) {}
+                }
+
+                // Message read loop
+                listenToSocketMessages(reader);
+
+            } catch (Exception e) {
+                isLocalConnecting = false;
+                Log.e(TAG, "[LOCAL_WIFI] Connection to host failed: " + e.getMessage());
+                if (isLocalTransportRunning) {
+                    JSObject statusObj = new JSObject();
+                    statusObj.put("status", "DISCONNECTED");
+                    statusObj.put("role", "RECEIVER");
+                    statusObj.put("message", e.getMessage());
+                    notifyListeners("localTransportStatus", statusObj);
+                }
+            }
+        });
+    }
+
+    private void listenToSocketMessages(BufferedReader reader) {
+        try {
+            String line;
+            while (isLocalTransportRunning && (line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+                JSObject msgObj = new JSObject();
+                msgObj.put("message", line);
+                notifyListeners("localMessageReceived", msgObj);
+            }
+        } catch (Exception e) {
+            if (isLocalTransportRunning) {
+                Log.w(TAG, "[LOCAL_WIFI] Socket read error / EOF: " + e.getMessage());
+            }
+        } finally {
+            if (isLocalTransportRunning) {
+                JSObject statusObj = new JSObject();
+                statusObj.put("status", "DISCONNECTED");
+                statusObj.put("role", localRole);
+                statusObj.put("message", "Connection closed by remote peer");
+                notifyListeners("localTransportStatus", statusObj);
+            }
+        }
+    }
+
+    @PluginMethod
+    public void sendLocalMessage(PluginCall call) {
+        String message = call.getString("message");
+        if (message == null) {
+            call.reject("message parameter is required");
+            return;
+        }
+
+        executorService.execute(() -> {
+            try {
+                synchronized (this) {
+                    if (localSocketWriter != null) {
+                        localSocketWriter.write(message + "\n");
+                        localSocketWriter.flush();
+                        call.resolve();
+                        return;
+                    }
+                }
+                call.reject("No active local socket connection");
+            } catch (Exception e) {
+                Log.e(TAG, "[LOCAL_WIFI] Error sending local message: " + e.getMessage());
+                call.reject("Failed to send message: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void stopLocalTransport(PluginCall call) {
+        executorService.execute(() -> {
+            cleanupLocalTransport();
+            JSObject statusObj = new JSObject();
+            statusObj.put("status", "DISCONNECTED");
+            statusObj.put("role", "NONE");
+            notifyListeners("localTransportStatus", statusObj);
+            if (call != null) {
+                call.resolve();
+            }
+        });
     }
 }
