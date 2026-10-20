@@ -201,7 +201,8 @@ export class WebRTCPeerTransport {
         }
 
         this.clearConnectionWatchdog();
-        if (this.onStatusCallback) {
+        // Only trigger status callback if the connection was already actively established
+        if (this.onStatusCallback && this.isOpen) {
             this.onStatusCallback(SyncState.DISCONNECTED);
         }
     }
@@ -281,40 +282,48 @@ export class WebRTCPeerTransport {
         const PeerClass = window.Peer || window.peerjs?.Peer;
         if (typeof PeerClass !== 'function') {
             const err = new Error("PeerJS library is missing or failed to load. Please ensure peerjs.min.js is accessible.");
+            err.type = 'peerjs-missing';
             console.error("[LISTEN_TOGETHER_RTC]", err);
             throw err;
         }
 
         return new Promise((resolve, reject) => {
-            let isResolved = false;
+            let settled = false;
             let hostTimeoutTimer = null;
 
-            hostTimeoutTimer = setTimeout(() => {
-                if (this.sessionId !== currentSession) return;
-                if (!isResolved) {
-                    isResolved = true;
-                    console.error("[LISTEN_TOGETHER_RTC] Host creation timed out waiting for PeerJS open event");
-                    this.close();
-                    const timeoutErr = new Error("Connection to signaling broker timed out. Please check your internet connection and retry.");
-                    timeoutErr.type = "timeout";
-                    reject(timeoutErr);
+            const cleanupAndSettle = (err, val) => {
+                if (settled) return;
+                settled = true;
+                if (hostTimeoutTimer) {
+                    clearTimeout(hostTimeoutTimer);
+                    hostTimeoutTimer = null;
                 }
-            }, 12000);
+                if (err) {
+                    this.close();
+                    reject(err);
+                } else {
+                    resolve(val);
+                }
+            };
+
+            hostTimeoutTimer = setTimeout(() => {
+                if (this.sessionId !== currentSession || settled) return;
+                console.error("[LISTEN_TOGETHER_RTC] Host creation timed out waiting for PeerJS open event");
+                const timeoutErr = new Error("Connection to signaling broker timed out. Please check your internet connection and retry.");
+                timeoutErr.type = "timeout";
+                cleanupAndSettle(timeoutErr);
+            }, 10000);
 
             try {
                 console.log(`[LISTEN_TOGETHER_RTC] Registering host Peer ID: ${this.myPeerId}`);
                 this.peer = new PeerClass(this.myPeerId, this.getPeerConfig());
 
                 this.peer.on('open', (id) => {
-                    if (this.sessionId !== currentSession) return;
+                    if (this.sessionId !== currentSession || settled) return;
                     console.log(`[LISTEN_TOGETHER_RTC] Host peer opened with ID: ${id}`);
-                    if (hostTimeoutTimer) clearTimeout(hostTimeoutTimer);
                     this.myPeerId = id;
                     this.isOpen = true;
-                    if (!isResolved) {
-                        isResolved = true;
-                        resolve(true);
-                    }
+                    cleanupAndSettle(null, true);
                 });
 
                 this.peer.on('connection', (conn) => {
@@ -336,8 +345,13 @@ export class WebRTCPeerTransport {
                 this.peer.on('disconnected', () => {
                     if (this.sessionId !== currentSession) return;
                     console.warn("[LISTEN_TOGETHER_RTC] Host peer disconnected from signaling broker");
-                    if (this.peer && !this.peer.destroyed) {
+                    // Only attempt reconnect if peer was successfully established previously
+                    if (this.isOpen && this.peer && !this.peer.destroyed) {
                         try { this.peer.reconnect(); } catch(e) {}
+                    } else if (!settled) {
+                        const discErr = new Error("Disconnected from signaling server before host registration completed.");
+                        discErr.type = "network";
+                        cleanupAndSettle(discErr);
                     }
                 });
 
@@ -345,26 +359,26 @@ export class WebRTCPeerTransport {
                     if (this.sessionId !== currentSession) return;
                     console.log("[LISTEN_TOGETHER_RTC] Host peer destroyed");
                     this.isOpen = false;
+                    if (!settled) {
+                        const closeErr = new Error("Peer connection closed before host registration completed.");
+                        cleanupAndSettle(closeErr);
+                    }
                 });
 
                 this.peer.on('error', (err) => {
                     if (this.sessionId !== currentSession) return;
-                    if (hostTimeoutTimer) clearTimeout(hostTimeoutTimer);
-                    this.handlePeerError(err);
-                    if (!isResolved) {
-                        isResolved = true;
-                        reject(err);
+                    if (!settled) {
+                        console.error("[LISTEN_TOGETHER_RTC] Host registration error:", err?.type, err?.message);
+                        cleanupAndSettle(err);
+                    } else {
+                        console.error("[LISTEN_TOGETHER_RTC] Host runtime peer error:", err?.type, err?.message);
+                        this.handlePeerError(err);
                     }
                 });
 
             } catch (err) {
-                if (this.sessionId !== currentSession) return;
-                if (hostTimeoutTimer) clearTimeout(hostTimeoutTimer);
-                console.error("[LISTEN_TOGETHER_RTC] Failed to initialize host Peer:", err);
-                if (!isResolved) {
-                    isResolved = true;
-                    reject(err);
-                }
+                console.error("[LISTEN_TOGETHER_RTC] Synchronous error initializing host Peer:", err);
+                cleanupAndSettle(err);
             }
         });
     }
@@ -380,6 +394,7 @@ export class WebRTCPeerTransport {
         const PeerClass = window.Peer || window.peerjs?.Peer;
         if (typeof PeerClass !== 'function') {
             const err = new Error("PeerJS library is missing or failed to load. Please ensure peerjs.min.js is accessible.");
+            err.type = 'peerjs-missing';
             console.error("[LISTEN_TOGETHER_RTC]", err);
             throw err;
         }
@@ -387,7 +402,18 @@ export class WebRTCPeerTransport {
         this.startConnectionWatchdog(14000);
 
         return new Promise((resolve, reject) => {
-            let isResolved = false;
+            let settled = false;
+
+            const cleanupAndSettle = (err, val) => {
+                if (settled) return;
+                settled = true;
+                if (err) {
+                    this.close();
+                    reject(err);
+                } else {
+                    resolve(val);
+                }
+            };
 
             try {
                 console.log(`[LISTEN_TOGETHER_RTC] Receiver creating Peer to connect to host: ${this.remotePeerId}`);
@@ -395,7 +421,7 @@ export class WebRTCPeerTransport {
                 this.peer = new PeerClass(this.getPeerConfig());
 
                 this.peer.on('open', (id) => {
-                    if (this.sessionId !== currentSession) return;
+                    if (this.sessionId !== currentSession || settled) return;
                     console.log(`[LISTEN_TOGETHER_RTC] Receiver peer opened with ID: ${id}. Connecting to ${this.remotePeerId}...`);
                     this.myPeerId = id;
 
@@ -406,25 +432,22 @@ export class WebRTCPeerTransport {
                         });
 
                         this.setupDataConnection(conn, currentSession);
-
-                        if (!isResolved) {
-                            isResolved = true;
-                            resolve(true);
-                        }
+                        cleanupAndSettle(null, true);
                     } catch (connErr) {
                         console.error("[LISTEN_TOGETHER_RTC] Failed to initiate connection to host:", connErr);
-                        if (!isResolved) {
-                            isResolved = true;
-                            reject(connErr);
-                        }
+                        cleanupAndSettle(connErr);
                     }
                 });
 
                 this.peer.on('disconnected', () => {
                     if (this.sessionId !== currentSession) return;
                     console.warn("[LISTEN_TOGETHER_RTC] Receiver disconnected from signaling broker");
-                    if (this.peer && !this.peer.destroyed) {
+                    if (this.isOpen && this.peer && !this.peer.destroyed) {
                         try { this.peer.reconnect(); } catch(e) {}
+                    } else if (!settled) {
+                        const discErr = new Error("Disconnected from signaling broker before connecting to host.");
+                        discErr.type = "network";
+                        cleanupAndSettle(discErr);
                     }
                 });
 
@@ -432,24 +455,25 @@ export class WebRTCPeerTransport {
                     if (this.sessionId !== currentSession) return;
                     console.log("[LISTEN_TOGETHER_RTC] Receiver peer destroyed");
                     this.isOpen = false;
+                    if (!settled) {
+                        cleanupAndSettle(new Error("Peer closed before connecting to host."));
+                    }
                 });
 
                 this.peer.on('error', (err) => {
                     if (this.sessionId !== currentSession) return;
-                    this.handlePeerError(err);
-                    if (!isResolved) {
-                        isResolved = true;
-                        reject(err);
+                    if (!settled) {
+                        console.error("[LISTEN_TOGETHER_RTC] Receiver registration error:", err?.type, err?.message);
+                        cleanupAndSettle(err);
+                    } else {
+                        console.error("[LISTEN_TOGETHER_RTC] Receiver runtime peer error:", err?.type, err?.message);
+                        this.handlePeerError(err);
                     }
                 });
 
             } catch (err) {
-                if (this.sessionId !== currentSession) return;
-                console.error("[LISTEN_TOGETHER_RTC] Failed to initialize receiver Peer:", err);
-                if (!isResolved) {
-                    isResolved = true;
-                    reject(err);
-                }
+                console.error("[LISTEN_TOGETHER_RTC] Synchronous error initializing receiver Peer:", err);
+                cleanupAndSettle(err);
             }
         });
     }
@@ -569,12 +593,20 @@ export class SyncManager {
 
         const btnCreate = document.getElementById('sync-btn-create-room');
         if (btnCreate) {
-            btnCreate.onclick = () => this.createRoom();
+            btnCreate.onclick = (e) => {
+                if (e?.preventDefault) e.preventDefault();
+                if (e?.stopPropagation) e.stopPropagation();
+                this.createRoom();
+            };
         }
 
         const btnJoin = document.getElementById('sync-btn-join-room');
         if (btnJoin) {
-            btnJoin.onclick = () => this.joinRoomFromInput();
+            btnJoin.onclick = (e) => {
+                if (e?.preventDefault) e.preventDefault();
+                if (e?.stopPropagation) e.stopPropagation();
+                this.joinRoomFromInput();
+            };
         }
 
         const inputCode = document.getElementById('sync-input-room-code');
@@ -768,6 +800,15 @@ export class SyncManager {
             return;
         }
 
+        const PeerClass = window.Peer || window.peerjs?.Peer;
+        if (typeof PeerClass !== 'function') {
+            console.error("[LISTEN_TOGETHER] PeerJS library is missing or failed to load.");
+            if (window.uiManager?.showNotification) {
+                window.uiManager.showNotification("PeerJS library is missing. Please check internet connection.", "error");
+            }
+            return;
+        }
+
         if (this.isInRoom()) {
             this.leaveRoom(false);
         }
@@ -777,62 +818,74 @@ export class SyncManager {
 
         let attempts = 0;
         let success = false;
+        let lastError = null;
 
-        while (attempts < 2 && !success) {
-            attempts++;
-            const newCode = this.generate6DigitCode();
-            console.log(`[LISTEN_TOGETHER] Generated room code attempt ${attempts}: ${newCode}`);
+        try {
+            while (attempts < 2 && !success) {
+                attempts++;
+                const newCode = this.generate6DigitCode();
+                console.log(`[LISTEN_TOGETHER] Generated room code attempt ${attempts}: ${newCode}`);
 
-            const transport = new WebRTCPeerTransport();
-            transport.init(
-                SyncRole.HOST,
-                (msg) => this.handleIncomingMessage(msg),
-                (status) => this.handleTransportStatus(status)
-            );
+                const transport = new WebRTCPeerTransport();
+                transport.init(
+                    SyncRole.HOST,
+                    (msg) => this.handleIncomingMessage(msg),
+                    (status) => this.handleTransportStatus(status)
+                );
 
-            try {
-                await transport.startHost(newCode);
+                try {
+                    await transport.startHost(newCode);
 
-                // PeerJS host successfully opened and registered with signaling broker!
-                this.transport = transport;
-                this.roomCode = newCode;
-                this.role = SyncRole.HOST;
-                this.currentSeq = 1;
-                this.lastSeenSeq = 0;
-                this.clockSync.reset();
+                    // PeerJS host successfully opened and registered with signaling broker!
+                    this.transport = transport;
+                    this.roomCode = newCode;
+                    this.role = SyncRole.HOST;
+                    this.currentSeq = 1;
+                    this.lastSeenSeq = 0;
+                    this.clockSync.reset();
 
-                this.setState(SyncState.WAITING);
-                success = true;
+                    this.setState(SyncState.WAITING);
+                    success = true;
 
-                if (window.uiManager?.showNotification) {
-                    window.uiManager.showNotification(`Room created! Code: ${this.roomCode}. Share code with friend.`, "success");
+                    if (window.uiManager?.showNotification) {
+                        window.uiManager.showNotification(`Room created! Code: ${this.roomCode}. Share code with friend.`, "success");
+                    }
+                } catch (err) {
+                    lastError = err;
+                    console.error(`[LISTEN_TOGETHER] Host creation failed on code ${newCode}:`, err);
+                    try { transport.close(); } catch(e) {}
+
+                    if (err?.type === 'unavailable-id' && attempts < 2) {
+                        console.warn(`[LISTEN_TOGETHER] Code ${newCode} was already taken. Retrying with a new code...`);
+                        continue;
+                    }
+                    break;
                 }
-            } catch (err) {
-                console.error(`[LISTEN_TOGETHER] Host creation failed on code ${newCode}:`, err);
-                try { transport.close(); } catch(e) {}
+            }
 
-                if (err?.type === 'unavailable-id' && attempts < 2) {
-                    console.warn(`[LISTEN_TOGETHER] Code ${newCode} was already taken. Retrying with a new code...`);
-                    continue;
-                }
-
+            if (!success) {
                 this.setState(SyncState.DISCONNECTED);
                 let userMsg = "Failed to create room. Please check internet connection.";
-                if (err?.type === 'unavailable-id') {
-                    userMsg = "Room code is already active. Please try tapping Create Room again.";
-                } else if (err?.message) {
-                    userMsg = err.message;
+                if (lastError?.type === 'unavailable-id') {
+                    userMsg = "Room code collision. Please tap Create Room again.";
+                } else if (lastError?.type === 'peerjs-missing') {
+                    userMsg = "PeerJS library is missing or failed to load.";
+                } else if (lastError?.type === 'network') {
+                    userMsg = "Network error: Unable to reach signaling broker.";
+                } else if (lastError?.type === 'timeout') {
+                    userMsg = "Room creation timed out. Signaling broker unreachable.";
+                } else if (lastError?.message) {
+                    userMsg = lastError.message;
                 }
 
                 if (window.uiManager?.showNotification) {
                     window.uiManager.showNotification(userMsg, "error");
                 }
-                break;
             }
+        } finally {
+            this.isCreatingRoom = false;
+            this.updateCreateRoomButton(false);
         }
-
-        this.isCreatingRoom = false;
-        this.updateCreateRoomButton(false);
     }
 
     async joinRoomFromInput() {
@@ -851,6 +904,15 @@ export class SyncManager {
         if (!this.validateRoomCode(trimmedCode)) {
             if (window.uiManager?.showNotification) {
                 window.uiManager.showNotification("Please enter a valid 6-digit numeric room code.", "warning");
+            }
+            return;
+        }
+
+        const PeerClass = window.Peer || window.peerjs?.Peer;
+        if (typeof PeerClass !== 'function') {
+            console.error("[LISTEN_TOGETHER] PeerJS library is missing or failed to load.");
+            if (window.uiManager?.showNotification) {
+                window.uiManager.showNotification("PeerJS library is missing. Please check internet connection.", "error");
             }
             return;
         }
@@ -1569,6 +1631,7 @@ export class SyncManager {
     // --- UI Drawer & Badges ---
 
     openSyncDrawer() {
+        this.bindUI();
         const drawer = document.getElementById('drawer-sync');
         if (drawer) {
             drawer.classList.add('active');
