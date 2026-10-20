@@ -32,12 +32,21 @@ export const TransportType = Object.freeze({
  * Calculates RTT and clock offset between host and receiver.
  */
 export class ClockSynchronizer {
-    constructor() {
+    constructor(role = SyncRole.NONE) {
+        this.role = role;
         this.samples = [];
         this.maxSamples = 7;
         this.clockOffset = 0; // receiverTime + clockOffset = hostTime
         this.rtt = 0;
         this.lastSyncEpoch = 0;
+    }
+
+    setRole(role) {
+        this.role = role;
+        if (role === SyncRole.HOST) {
+            this.clockOffset = 0;
+            this.samples = [];
+        }
     }
 
     reset() {
@@ -55,17 +64,23 @@ export class ClockSynchronizer {
         };
     }
 
-    createPongPayload(pingData, seq) {
+    createPongPayload(pingData) {
+        const now = Date.now();
         return {
             type: 'SYNC_PONG',
             t0: pingData.t0,
-            t1: Date.now(),
-            t2: Date.now(),
-            seq
+            t1: now,
+            t2: now,
+            seq: pingData.seq
         };
     }
 
     processPong(pongData) {
+        // Host clock is the reference clock (offset is always 0 on host)
+        if (this.role === SyncRole.HOST) {
+            return { rtt: this.rtt, clockOffset: 0 };
+        }
+
         const t3 = Date.now();
         const t0 = pongData.t0;
         const t1 = pongData.t1;
@@ -73,7 +88,8 @@ export class ClockSynchronizer {
 
         const roundTrip = (t3 - t0) - (t2 - t1);
         const rtt = Math.max(1, roundTrip);
-        // Offset: Delta = ((t1 - t0) + (t2 - t3)) / 2
+        // NTP offset equation: theta = ((t1 - t0) + (t2 - t3)) / 2
+        // where theta = HostTime - ReceiverTime
         const offset = Math.round(((t1 - t0) + (t2 - t3)) / 2);
 
         this.samples.push({ rtt, offset, timestamp: t3 });
@@ -93,6 +109,9 @@ export class ClockSynchronizer {
     }
 
     getSynchronizedNow() {
+        if (this.role === SyncRole.HOST) {
+            return Date.now();
+        }
         return Date.now() + this.clockOffset;
     }
 }
@@ -117,6 +136,13 @@ export class WebRTCPeerTransport {
         this.remotePeerId = null;
         this.connectionWatchdogTimer = null;
         this.sessionId = 0;
+        this.transportType = TransportType.INTERNET;
+        this.localLanConfig = null;
+    }
+
+    setTransportMode(type, localLanConfig = null) {
+        this.transportType = type;
+        this.localLanConfig = localLanConfig;
     }
 
     init(role, onMessage, onStatus) {
@@ -126,6 +152,22 @@ export class WebRTCPeerTransport {
     }
 
     getPeerConfig() {
+        if (this.transportType === TransportType.LOCAL_WIFI && this.localLanConfig?.host) {
+            const host = this.localLanConfig.host;
+            const port = parseInt(this.localLanConfig.port, 10) || 9000;
+            const path = this.localLanConfig.path || '/';
+            return {
+                host,
+                port,
+                path,
+                secure: false,
+                debug: 1,
+                config: {
+                    iceServers: [] // Local LAN P2P does not require external STUN
+                }
+            };
+        }
+
         return {
             host: '0.peerjs.com',
             port: 443,
@@ -513,26 +555,167 @@ export class WebRTCPeerTransport {
 }
 
 /**
- * Local Wi-Fi / Hotspot Transport Placeholder
- * Real offline P2P requires Android Native Service Discovery (NSD) over local LAN sockets.
+ * AndroidLocalWifiTransport
+ * Implements real offline local Wi-Fi / Hotspot peer-to-peer transport using
+ * Android Network Service Discovery (NSD) and direct TCP sockets via Capacitor NativeAudio.
+ * No internet connection or external signaling broker is required.
  */
-export class LocalManualTransport {
+export class AndroidLocalWifiTransport {
     constructor() {
-        this.isSupported = false;
+        this.isOpen = false;
+        this.onMessageCallback = null;
+        this.onStatusCallback = null;
+        this.role = SyncRole.NONE;
+        this.roomId = null;
+        this.listeners = [];
     }
 
-    init(role, onMessage, onStatus) {}
+    init(role, onMessage, onStatus) {
+        this.role = role;
+        this.onMessageCallback = onMessage;
+        this.onStatusCallback = onStatus;
+    }
+
+    getPlugin() {
+        return window.Capacitor?.Plugins?.AudioPlayer || window.Capacitor?.Plugins?.NativeAudio || NativeAudio;
+    }
 
     async startHost(roomId) {
-        throw new Error("Local Wi-Fi Mode requires Android Native Service Discovery (NSD) and is under active development. Please switch to Internet P2P mode.");
+        if (!Capacitor?.isNativePlatform?.()) {
+            throw new Error("Local Wi-Fi transport is only available on the Android native app.");
+        }
+        this.roomId = roomId;
+        this.role = SyncRole.HOST;
+        await this.setupEventListeners();
+
+        const plugin = this.getPlugin();
+        if (!plugin || typeof plugin.startLocalHost !== 'function') {
+            throw new Error("Local Wi-Fi transport is only available on the Android native app.");
+        }
+
+        const res = await plugin.startLocalHost({ roomCode: roomId });
+        if (!res || !res.success) {
+            throw new Error("Failed to start Android local host server.");
+        }
+        return res;
     }
 
     async startReceiver(roomId) {
-        throw new Error("Local Wi-Fi Mode requires Android Native Service Discovery (NSD) and is under active development. Please switch to Internet P2P mode.");
+        if (!Capacitor?.isNativePlatform?.()) {
+            throw new Error("Local Wi-Fi transport is only available on the Android native app.");
+        }
+        this.roomId = roomId;
+        this.role = SyncRole.RECEIVER;
+        await this.setupEventListeners();
+
+        const plugin = this.getPlugin();
+        if (!plugin || typeof plugin.startLocalReceiver !== 'function') {
+            throw new Error("Local Wi-Fi transport is only available on the Android native app.");
+        }
+
+        const res = await plugin.startLocalReceiver({ roomCode: roomId });
+        if (!res || !res.success) {
+            throw new Error("Failed to start Android local service discovery.");
+        }
+        return res;
     }
 
-    send(data) { return false; }
-    close() {}
+    async setupEventListeners() {
+        this.removeEventListeners();
+        const plugin = this.getPlugin();
+        if (!plugin || typeof plugin.addListener !== 'function') return;
+
+        try {
+            const statusSub = await plugin.addListener('localTransportStatus', (data) => {
+                console.log("[LOCAL_WIFI_JS] Status event:", data);
+                if (!data) return;
+
+                if (data.status === 'CONNECTED') {
+                    this.isOpen = true;
+                    if (this.onStatusCallback) {
+                        this.onStatusCallback(SyncState.READY);
+                    }
+                } else if (data.status === 'WAITING') {
+                    this.isOpen = true;
+                    if (this.onStatusCallback) {
+                        this.onStatusCallback(SyncState.WAITING);
+                    }
+                } else if (data.status === 'CONNECTING') {
+                    if (this.onStatusCallback) {
+                        this.onStatusCallback(SyncState.CONNECTING);
+                    }
+                } else if (data.status === 'DISCONNECTED') {
+                    this.isOpen = false;
+                    if (this.onStatusCallback) {
+                        this.onStatusCallback(SyncState.DISCONNECTED);
+                    }
+                } else if (data.status === 'ERROR') {
+                    this.isOpen = false;
+                    if (this.onStatusCallback) {
+                        this.onStatusCallback(SyncState.DISCONNECTED);
+                    }
+                    if (window.uiManager?.showNotification && data.message) {
+                        window.uiManager.showNotification(`Local Wi-Fi: ${data.message}`, "error");
+                    }
+                }
+            });
+            this.listeners.push(statusSub);
+
+            const msgSub = await plugin.addListener('localMessageReceived', (data) => {
+                if (!data || !data.message) return;
+                try {
+                    const parsed = typeof data.message === 'string' ? JSON.parse(data.message) : data.message;
+                    if (parsed && this.onMessageCallback) {
+                        this.onMessageCallback(parsed);
+                    }
+                } catch (err) {
+                    console.error("[LOCAL_WIFI_JS] Failed to parse message:", err);
+                }
+            });
+            this.listeners.push(msgSub);
+        } catch (e) {
+            console.warn("[LOCAL_WIFI_JS] Could not attach plugin event listeners:", e);
+        }
+    }
+
+    removeEventListeners() {
+        for (const sub of this.listeners) {
+            try {
+                if (typeof sub?.remove === 'function') {
+                    sub.remove();
+                }
+            } catch (e) {}
+        }
+        this.listeners = [];
+    }
+
+    send(data) {
+        if (!data) return false;
+        const plugin = this.getPlugin();
+        if (!plugin || typeof plugin.sendLocalMessage !== 'function') {
+            return false;
+        }
+
+        try {
+            const payload = JSON.stringify(data);
+            plugin.sendLocalMessage({ message: payload }).catch((err) => {
+                console.error("[LOCAL_WIFI_JS] Send message error:", err);
+            });
+            return true;
+        } catch (e) {
+            console.error("[LOCAL_WIFI_JS] Send serialize error:", e);
+            return false;
+        }
+    }
+
+    close() {
+        this.isOpen = false;
+        this.removeEventListeners();
+        const plugin = this.getPlugin();
+        if (plugin && typeof plugin.stopLocalTransport === 'function') {
+            plugin.stopLocalTransport().catch(() => {});
+        }
+    }
 }
 
 /**
@@ -551,9 +734,13 @@ export class SyncManager {
         this.isCreatingRoom = false;
         this.isJoiningRoom = false;
 
-        this.clockSync = new ClockSynchronizer();
+        this.clockSync = new ClockSynchronizer(this.role);
         this.currentSeq = 0;
-        this.lastSeenSeq = 0;
+        this.lastSeenHostCmdSeq = 0;
+        this.currentTrackCmdSeq = 0;
+        this.lastSeekEpoch = 0;
+        this.lastHeartbeatEpoch = 0;
+        this.localLanConfig = { host: '192.168.43.1', port: 9000, path: '/' };
 
         // Authoritative Host State
         this.sharedTrack = null;
@@ -631,16 +818,26 @@ export class SyncManager {
 
         const btnModeInternet = document.getElementById('sync-mode-internet');
         const btnModeLocal = document.getElementById('sync-mode-local');
+        const lanSection = document.getElementById('sync-lan-config-section');
+        const webNotice = document.getElementById('sync-lan-web-notice');
+
         if (btnModeInternet && btnModeLocal) {
             btnModeInternet.onclick = () => {
                 this.setTransportType(TransportType.INTERNET);
                 btnModeInternet.classList.add('active');
                 btnModeLocal.classList.remove('active');
+                if (lanSection) lanSection.style.display = 'none';
             };
             btnModeLocal.onclick = () => {
                 this.setTransportType(TransportType.LOCAL_WIFI);
                 btnModeLocal.classList.add('active');
                 btnModeInternet.classList.remove('active');
+                if (lanSection) {
+                    lanSection.style.display = 'block';
+                    if (webNotice) {
+                        webNotice.style.display = Capacitor.isNativePlatform() ? 'none' : 'block';
+                    }
+                }
             };
         }
 
@@ -695,15 +892,9 @@ export class SyncManager {
             return;
         }
 
-        if (type === TransportType.LOCAL_WIFI) {
-            if (window.uiManager?.showNotification) {
-                window.uiManager.showNotification("Local Wi-Fi Mode requires Android Native Service Discovery (NSD) and is under development. Use Internet P2P mode.", "info");
-            }
-            return;
-        }
-
         this.transportType = type;
         console.log(`[LISTEN_TOGETHER] Transport set to: ${type}`);
+        this.renderDrawerUI();
     }
 
     generate6DigitCode() {
@@ -730,7 +921,7 @@ export class SyncManager {
     handleTransportStatus(status) {
         console.log(`[LISTEN_TOGETHER] Transport status callback received: ${status}`);
         if (status === SyncState.DISCONNECTED) {
-            if (this.role === SyncRole.HOST && this.transport?.peer && !this.transport.peer.destroyed) {
+            if (this.role === SyncRole.HOST && ((this.transport?.peer && !this.transport.peer.destroyed) || this.transportType === TransportType.LOCAL_WIFI)) {
                 console.log("[LISTEN_TOGETHER] Receiver disconnected. Host returning to WAITING state.");
                 this.setState(SyncState.WAITING);
                 return;
@@ -753,19 +944,32 @@ export class SyncManager {
             this.currentDriftMs = 0;
             this.isCreatingRoom = false;
             this.isJoiningRoom = false;
+            this.lastSeenHostCmdSeq = 0;
+            this.currentTrackCmdSeq = 0;
+            this.lastSeekEpoch = 0;
+            this.lastHeartbeatEpoch = 0;
+            this.clockSync.setRole(SyncRole.NONE);
+            this.clockSync.reset();
             this.updateCreateRoomButton(false);
             this.updateJoinRoomButton(false);
         }
 
         if (newState === SyncState.READY && oldState !== SyncState.READY) {
             if (this.isHost()) {
-                this.startClockSync();
-                this.startHeartbeat();
-                if (window.player?.currentTrack) {
-                    this.broadcastTrackChange(window.player.currentTrack, window.player.queueIndex || 0);
+                this.clockSync.setRole(SyncRole.HOST);
+                if (oldState === SyncState.WAITING || oldState === SyncState.DISCONNECTED) {
+                    this.clockSync.reset();
+                    this.startHeartbeat();
+                    if (window.player?.currentTrack) {
+                        this.broadcastTrackChange(window.player.currentTrack, window.player.queueIndex || 0);
+                    }
                 }
             } else if (this.isReceiver()) {
-                this.startClockSync();
+                this.clockSync.setRole(SyncRole.RECEIVER);
+                if (oldState === SyncState.CONNECTING || oldState === SyncState.DISCONNECTED) {
+                    this.clockSync.reset();
+                    this.startClockSync();
+                }
             }
         }
 
@@ -800,13 +1004,22 @@ export class SyncManager {
             return;
         }
 
-        const PeerClass = window.Peer || window.peerjs?.Peer;
-        if (typeof PeerClass !== 'function') {
-            console.error("[LISTEN_TOGETHER] PeerJS library is missing or failed to load.");
-            if (window.uiManager?.showNotification) {
-                window.uiManager.showNotification("PeerJS library is missing. Please check internet connection.", "error");
+        if (this.transportType === TransportType.LOCAL_WIFI) {
+            if (!Capacitor.isNativePlatform()) {
+                if (window.uiManager?.showNotification) {
+                    window.uiManager.showNotification("Offline Local Wi-Fi discovery requires the Android app. Please use Same Wi-Fi / Internet mode on web.", "warning");
+                }
+                return;
             }
-            return;
+        } else {
+            const PeerClass = window.Peer || window.peerjs?.Peer;
+            if (typeof PeerClass !== 'function') {
+                console.error("[LISTEN_TOGETHER] PeerJS library is missing or failed to load.");
+                if (window.uiManager?.showNotification) {
+                    window.uiManager.showNotification("PeerJS library is missing. Please check internet connection.", "error");
+                }
+                return;
+            }
         }
 
         if (this.isInRoom()) {
@@ -826,7 +1039,13 @@ export class SyncManager {
                 const newCode = this.generate6DigitCode();
                 console.log(`[LISTEN_TOGETHER] Generated room code attempt ${attempts}: ${newCode}`);
 
-                const transport = new WebRTCPeerTransport();
+                let transport;
+                if (this.transportType === TransportType.LOCAL_WIFI) {
+                    transport = new AndroidLocalWifiTransport();
+                } else {
+                    transport = new WebRTCPeerTransport();
+                    transport.setTransportMode(this.transportType, this.localLanConfig);
+                }
                 transport.init(
                     SyncRole.HOST,
                     (msg) => this.handleIncomingMessage(msg),
@@ -836,19 +1055,23 @@ export class SyncManager {
                 try {
                     await transport.startHost(newCode);
 
-                    // PeerJS host successfully opened and registered with signaling broker!
                     this.transport = transport;
                     this.roomCode = newCode;
                     this.role = SyncRole.HOST;
                     this.currentSeq = 1;
-                    this.lastSeenSeq = 0;
+                    this.lastSeenHostCmdSeq = 0;
+                    this.currentTrackCmdSeq = 0;
+                    this.lastSeekEpoch = 0;
+                    this.lastHeartbeatEpoch = 0;
+                    this.clockSync.setRole(SyncRole.HOST);
                     this.clockSync.reset();
 
                     this.setState(SyncState.WAITING);
                     success = true;
 
                     if (window.uiManager?.showNotification) {
-                        window.uiManager.showNotification(`Room created! Code: ${this.roomCode}. Share code with friend.`, "success");
+                        const modeLabel = this.transportType === TransportType.LOCAL_WIFI ? "Offline Local Wi-Fi Room" : "Room";
+                        window.uiManager.showNotification(`${modeLabel} created! Code: ${this.roomCode}. Share code with friend.`, "success");
                     }
                 } catch (err) {
                     lastError = err;
@@ -865,7 +1088,7 @@ export class SyncManager {
 
             if (!success) {
                 this.setState(SyncState.DISCONNECTED);
-                let userMsg = "Failed to create room. Please check internet connection.";
+                let userMsg = "Failed to create room. Please check connection.";
                 if (lastError?.type === 'unavailable-id') {
                     userMsg = "Room code collision. Please tap Create Room again.";
                 } else if (lastError?.type === 'peerjs-missing') {
@@ -908,13 +1131,22 @@ export class SyncManager {
             return;
         }
 
-        const PeerClass = window.Peer || window.peerjs?.Peer;
-        if (typeof PeerClass !== 'function') {
-            console.error("[LISTEN_TOGETHER] PeerJS library is missing or failed to load.");
-            if (window.uiManager?.showNotification) {
-                window.uiManager.showNotification("PeerJS library is missing. Please check internet connection.", "error");
+        if (this.transportType === TransportType.LOCAL_WIFI) {
+            if (!Capacitor.isNativePlatform()) {
+                if (window.uiManager?.showNotification) {
+                    window.uiManager.showNotification("Offline Local Wi-Fi discovery requires the Android app. Please use Same Wi-Fi / Internet mode on web.", "warning");
+                }
+                return;
             }
-            return;
+        } else {
+            const PeerClass = window.Peer || window.peerjs?.Peer;
+            if (typeof PeerClass !== 'function') {
+                console.error("[LISTEN_TOGETHER] PeerJS library is missing or failed to load.");
+                if (window.uiManager?.showNotification) {
+                    window.uiManager.showNotification("PeerJS library is missing. Please check internet connection.", "error");
+                }
+                return;
+            }
         }
 
         if (this.isInRoom()) {
@@ -924,7 +1156,13 @@ export class SyncManager {
         this.isJoiningRoom = true;
         this.updateJoinRoomButton(true);
 
-        const transport = new WebRTCPeerTransport();
+        let transport;
+        if (this.transportType === TransportType.LOCAL_WIFI) {
+            transport = new AndroidLocalWifiTransport();
+        } else {
+            transport = new WebRTCPeerTransport();
+            transport.setTransportMode(this.transportType, this.localLanConfig);
+        }
         transport.init(
             SyncRole.RECEIVER,
             (msg) => this.handleIncomingMessage(msg),
@@ -936,7 +1174,11 @@ export class SyncManager {
             this.roomCode = trimmedCode;
             this.role = SyncRole.RECEIVER;
             this.currentSeq = 0;
-            this.lastSeenSeq = 0;
+            this.lastSeenHostCmdSeq = 0;
+            this.currentTrackCmdSeq = 0;
+            this.lastSeekEpoch = 0;
+            this.lastHeartbeatEpoch = 0;
+            this.clockSync.setRole(SyncRole.RECEIVER);
             this.clockSync.reset();
             this.setState(SyncState.CONNECTING);
 
@@ -1051,6 +1293,12 @@ export class SyncManager {
     // --- Clock Synchronization ---
 
     startClockSync() {
+        this.stopClockSyncInterval();
+        if (this.role !== SyncRole.RECEIVER) {
+            // In NTP client/server model, only the Receiver pings the Host reference clock
+            return;
+        }
+
         let count = 0;
         const burstInterval = setInterval(() => {
             if (!this.isInRoom() || !this.transport) {
@@ -1063,16 +1311,17 @@ export class SyncManager {
                 clearInterval(burstInterval);
                 this.startClockSyncInterval();
             }
-        }, 350);
+        }, 300);
     }
 
     startClockSyncInterval() {
         this.stopClockSyncInterval();
+        if (this.role !== SyncRole.RECEIVER) return;
         this.clockSyncTimer = setInterval(() => {
             if (this.isInRoom() && this.transport) {
                 this.sendPing();
             }
-        }, 12000);
+        }, 10000);
     }
 
     stopClockSyncInterval() {
@@ -1094,13 +1343,13 @@ export class SyncManager {
     handleIncomingMessage(data) {
         if (!data || !data.type) return;
 
-        // Sequence Validation
-        if (typeof data.seq === 'number') {
-            if (data.seq <= this.lastSeenSeq && data.type !== 'SYNC_PONG' && data.type !== 'SYNC_PING') {
-                console.log(`[LISTEN_TOGETHER] Discarded stale packet seq ${data.seq} <= ${this.lastSeenSeq}`);
+        // Sequence Validation for Authoritative Host Commands
+        if (this.role === SyncRole.RECEIVER && typeof data.cmdSeq === 'number') {
+            if (data.cmdSeq < this.lastSeenHostCmdSeq) {
+                console.log(`[LISTEN_TOGETHER] Discarded stale host command seq ${data.cmdSeq} < ${this.lastSeenHostCmdSeq}`);
                 return;
             }
-            this.lastSeenSeq = data.seq;
+            this.lastSeenHostCmdSeq = data.cmdSeq;
         }
 
         switch (data.type) {
@@ -1168,11 +1417,12 @@ export class SyncManager {
 
     handlePing(pingData) {
         if (!this.transport) return;
-        const pong = this.clockSync.createPongPayload(pingData, pingData.seq);
+        const pong = this.clockSync.createPongPayload(pingData);
         this.transport.send(pong);
     }
 
     handlePong(pongData) {
+        if (this.role !== SyncRole.RECEIVER) return;
         const stats = this.clockSync.processPong(pongData);
         this.updateStats();
         console.log(`[LISTEN_TOGETHER] NTP Sync: RTT=${stats.rtt}ms, ClockOffset=${stats.clockOffset}ms`);
@@ -1183,7 +1433,12 @@ export class SyncManager {
     broadcastTrackChange(track, queueIndex = 0) {
         if (!this.isHost() || !track) return;
 
-        this.currentSeq++;
+        if (this.scheduledPlayTimer) {
+            clearTimeout(this.scheduledPlayTimer);
+            this.scheduledPlayTimer = null;
+        }
+
+        this.currentTrackCmdSeq = ++this.currentSeq;
         this.sharedTrack = {
             id: track.id,
             s3Key: track.s3Key,
@@ -1195,16 +1450,16 @@ export class SyncManager {
         };
 
         this.setState(SyncState.BUFFERING);
-        console.log("[LISTEN_TOGETHER] Host broadcasting PREPARE_TRACK:", this.sharedTrack.title);
+        console.log(`[LISTEN_TOGETHER] Host broadcasting PREPARE_TRACK (cmdSeq ${this.currentTrackCmdSeq}):`, this.sharedTrack.title);
 
         this.transport.send({
             type: 'PREPARE_TRACK',
             track: this.sharedTrack,
             queueIndex,
-            seq: this.currentSeq
+            cmdSeq: this.currentTrackCmdSeq
         });
 
-        // Readiness Watchdog: If Receiver doesn't report ready within 4.5s, Host plays gracefully
+        // Readiness Watchdog: If Receiver doesn't report ready within 8s, Host starts gracefully
         if (this.pendingTrackChangeTimeout) {
             clearTimeout(this.pendingTrackChangeTimeout);
         }
@@ -1217,10 +1472,16 @@ export class SyncManager {
                     window.uiManager.showNotification("Friend took too long to prepare; starting playback.", "info");
                 }
             }
-        }, 4500);
+        }, 8000);
     }
 
     handleReceiverReady(data) {
+        // Validate readiness matches current track change command
+        if (data.cmdSeq !== this.currentTrackCmdSeq || (this.sharedTrack && String(data.trackId) !== String(this.sharedTrack.id))) {
+            console.log("[LISTEN_TOGETHER] Ignoring stale RECEIVER_READY packet for previous track/cmd");
+            return;
+        }
+
         console.log("[LISTEN_TOGETHER] Receiver reported READY for track:", data.trackId);
         if (this.pendingTrackChangeTimeout) {
             clearTimeout(this.pendingTrackChangeTimeout);
@@ -1232,11 +1493,12 @@ export class SyncManager {
             window.uiManager.showNotification("Friend is ready! Starting synchronized playback...", "success");
         }
 
-        // Both devices are ready! Schedule synchronized start
+        // Both devices are ready! Schedule synchronized start at position 0
         this.broadcastScheduledPlay(0);
     }
 
     handleReceiverError(data) {
+        if (data.cmdSeq !== this.currentTrackCmdSeq) return;
         console.warn("[LISTEN_TOGETHER] Receiver reported error:", data.reason);
         if (this.pendingTrackChangeTimeout) {
             clearTimeout(this.pendingTrackChangeTimeout);
@@ -1251,19 +1513,25 @@ export class SyncManager {
     broadcastScheduledPlay(position = 0) {
         if (!this.isHost()) return;
 
+        if (this.scheduledPlayTimer) {
+            clearTimeout(this.scheduledPlayTimer);
+            this.scheduledPlayTimer = null;
+        }
+
         this.currentSeq++;
         this.isHostPlaying = true;
-        // Lead-time: measured RTT + safety buffer (at least 350ms, or RTT + 150ms)
-        const leadTimeMs = Math.max(350, (this.clockSync.rtt || 100) + 150);
+        // Lead-time: measured RTT + network jitter buffer (at least 350ms, or RTT + 200ms)
+        const rtt = this.clockSync.rtt || 80;
+        const leadTimeMs = Math.max(350, Math.min(1200, rtt + 200));
         const scheduledStartEpoch = this.clockSync.getSynchronizedNow() + leadTimeMs;
 
-        console.log(`[LISTEN_TOGETHER] Host scheduling start in ${leadTimeMs}ms at epoch ${scheduledStartEpoch}`);
+        console.log(`[LISTEN_TOGETHER] Host scheduling start in ${leadTimeMs}ms at epoch ${scheduledStartEpoch} pos=${position}`);
 
         this.transport.send({
             type: 'SCHEDULED_PLAY',
             position,
             scheduledStartEpoch,
-            seq: this.currentSeq
+            cmdSeq: this.currentSeq
         });
 
         // Host schedules its own audio start at target epoch
@@ -1273,6 +1541,11 @@ export class SyncManager {
     broadcastPause(position = 0) {
         if (!this.isHost()) return;
 
+        if (this.scheduledPlayTimer) {
+            clearTimeout(this.scheduledPlayTimer);
+            this.scheduledPlayTimer = null;
+        }
+
         this.currentSeq++;
         this.isHostPlaying = false;
 
@@ -1280,12 +1553,17 @@ export class SyncManager {
             type: 'PAUSE',
             position,
             timestamp: this.clockSync.getSynchronizedNow(),
-            seq: this.currentSeq
+            cmdSeq: this.currentSeq
         });
     }
 
     broadcastSeek(position, isPlaying = true) {
         if (!this.isHost()) return;
+
+        if (this.scheduledPlayTimer) {
+            clearTimeout(this.scheduledPlayTimer);
+            this.scheduledPlayTimer = null;
+        }
 
         this.currentSeq++;
         this.isHostPlaying = isPlaying;
@@ -1295,7 +1573,7 @@ export class SyncManager {
             position,
             isPlaying,
             timestamp: this.clockSync.getSynchronizedNow(),
-            seq: this.currentSeq
+            cmdSeq: this.currentSeq
         });
     }
 
@@ -1361,19 +1639,30 @@ export class SyncManager {
         const trackMeta = data.track;
         if (!trackMeta) return;
 
+        if (this.scheduledPlayTimer) {
+            clearTimeout(this.scheduledPlayTimer);
+            this.scheduledPlayTimer = null;
+        }
+
+        if (this.isNudgeActive) {
+            this.applyPlaybackRate(1.0);
+            this.isNudgeActive = false;
+        }
+
         console.log("[LISTEN_TOGETHER] Receiver preparing track:", trackMeta.title);
         this.setState(SyncState.BUFFERING);
+        this.sharedTrack = trackMeta;
 
         try {
-            // Load track directly into player pipeline (supports both native Android and Web)
+            // Load track directly into player pipeline and wait until playable
             const success = await window.player?.loadSyncTrack(trackMeta);
             if (!success) {
                 console.warn("[LISTEN_TOGETHER] Could not load track on receiver:", trackMeta.title);
                 this.transport.send({
                     type: 'RECEIVER_ERROR',
                     trackId: trackMeta.id,
-                    reason: 'Track audio unavailable on receiver',
-                    seq: this.currentSeq
+                    cmdSeq: data.cmdSeq,
+                    reason: 'Track audio unavailable or failed to buffer on receiver'
                 });
                 if (window.uiManager?.showNotification) {
                     window.uiManager.showNotification(`Cannot sync: "${trackMeta.title}" is unavailable on this phone.`, "error");
@@ -1381,12 +1670,13 @@ export class SyncManager {
                 return;
             }
 
-            // Signal readiness to host
+            // Signal genuine readiness to host
+            this.lastSeekEpoch = Date.now();
             this.setState(SyncState.READY);
             this.transport.send({
                 type: 'RECEIVER_READY',
                 trackId: trackMeta.id,
-                seq: this.currentSeq
+                cmdSeq: data.cmdSeq
             });
             console.log("[LISTEN_TOGETHER] Sent RECEIVER_READY for:", trackMeta.title);
         } catch (err) {
@@ -1394,8 +1684,8 @@ export class SyncManager {
             this.transport.send({
                 type: 'RECEIVER_ERROR',
                 trackId: trackMeta.id,
-                reason: err.message,
-                seq: this.currentSeq
+                cmdSeq: data.cmdSeq,
+                reason: err.message || 'Track load failed'
             });
         }
     }
@@ -1451,11 +1741,10 @@ export class SyncManager {
         this.isExecutingPlay = true;
 
         try {
+            const pos = (typeof targetPosition === 'number' && targetPosition >= 0) ? targetPosition : 0.0;
             if (Capacitor.isNativePlatform() && window.player.nativeInitialized) {
                 try {
-                    if (typeof targetPosition === 'number' && targetPosition > 0) {
-                        await NativeAudio.seek({ audioId: 'main', timeInSeconds: Math.round(targetPosition) });
-                    }
+                    await NativeAudio.seek({ audioId: 'main', timeInSeconds: pos });
                     await NativeAudio.play({ audioId: 'main' });
                     window.player.syncUIState(true);
                 } catch(e) {
@@ -1463,37 +1752,48 @@ export class SyncManager {
                 }
             } else if (window.player.audio) {
                 try {
-                    if (typeof targetPosition === 'number' && targetPosition > 0) {
-                        window.player.audio.currentTime = targetPosition;
-                    }
+                    window.player.audio.currentTime = pos;
                     await window.player.audio.play();
                     window.player.syncUIState(true);
                 } catch(e) {
                     console.error("[LISTEN_TOGETHER] Web executePlay error", e);
                 }
             }
+            this.lastSeekEpoch = Date.now();
         } finally {
             setTimeout(() => {
                 this.isExecutingPlay = false;
-            }, 300);
+            }, 250);
         }
     }
 
     async handlePause(data) {
         console.log("[LISTEN_TOGETHER] Host paused playback at:", data.position);
+        if (this.scheduledPlayTimer) {
+            clearTimeout(this.scheduledPlayTimer);
+            this.scheduledPlayTimer = null;
+        }
+
+        if (this.isNudgeActive) {
+            this.applyPlaybackRate(1.0);
+            this.isNudgeActive = false;
+        }
+
         if (!window.player) return;
+
+        const pos = (typeof data?.position === 'number' && data.position >= 0) ? data.position : null;
 
         if (Capacitor.isNativePlatform() && window.player.nativeInitialized) {
             try {
                 await NativeAudio.pause({ audioId: 'main' });
-                if (typeof data.position === 'number') {
-                    await NativeAudio.seek({ audioId: 'main', timeInSeconds: Math.round(data.position) });
+                if (pos !== null) {
+                    await NativeAudio.seek({ audioId: 'main', timeInSeconds: pos });
                 }
             } catch(e) {}
         } else if (window.player.audio) {
             window.player.audio.pause();
-            if (typeof data.position === 'number') {
-                window.player.audio.currentTime = data.position;
+            if (pos !== null) {
+                window.player.audio.currentTime = pos;
             }
         }
 
@@ -1502,11 +1802,24 @@ export class SyncManager {
 
     async handleSeek(data) {
         console.log("[LISTEN_TOGETHER] Host seeked to:", data.position, "isPlaying:", data.isPlaying);
+        if (this.scheduledPlayTimer) {
+            clearTimeout(this.scheduledPlayTimer);
+            this.scheduledPlayTimer = null;
+        }
+
+        if (this.isNudgeActive) {
+            this.applyPlaybackRate(1.0);
+            this.isNudgeActive = false;
+        }
+
         if (!window.player) return;
+
+        const pos = (typeof data?.position === 'number' && data.position >= 0) ? data.position : 0.0;
+        this.lastSeekEpoch = Date.now();
 
         if (Capacitor.isNativePlatform() && window.player.nativeInitialized) {
             try {
-                await NativeAudio.seek({ audioId: 'main', timeInSeconds: Math.round(data.position) });
+                await NativeAudio.seek({ audioId: 'main', timeInSeconds: pos });
                 if (data.isPlaying) {
                     await NativeAudio.play({ audioId: 'main' });
                     window.player.syncUIState(true);
@@ -1516,7 +1829,7 @@ export class SyncManager {
                 }
             } catch(e) {}
         } else if (window.player.audio) {
-            window.player.audio.currentTime = data.position;
+            window.player.audio.currentTime = pos;
             if (data.isPlaying) {
                 window.player.audio.play().catch(() => {});
                 window.player.syncUIState(true);
@@ -1535,7 +1848,20 @@ export class SyncManager {
         const { position: hostPos, isPlaying: hostPlaying, timestamp } = data;
         const now = this.clockSync.getSynchronizedNow();
 
-        const elapsedSec = hostPlaying ? (now - timestamp) / 1000 : 0;
+        // Discard heartbeats that were sent before our last recorded heartbeat
+        if (typeof timestamp === 'number') {
+            if (timestamp < this.lastHeartbeatEpoch) {
+                return;
+            }
+            this.lastHeartbeatEpoch = timestamp;
+        }
+
+        // Skip drift correction if audio just seeked or started within 1.8s
+        if (Date.now() - this.lastSeekEpoch < 1800) {
+            return;
+        }
+
+        const elapsedSec = hostPlaying ? Math.max(0, (now - timestamp) / 1000) : 0;
         const expectedHostPos = hostPos + elapsedSec;
 
         let receiverPos = 0;
@@ -1544,7 +1870,7 @@ export class SyncManager {
         if (Capacitor.isNativePlatform() && window.player?.nativeInitialized) {
             try {
                 const res = await NativeAudio.getCurrentTime({ audioId: 'main' });
-                receiverPos = res.currentTime || 0;
+                receiverPos = (typeof res.currentTime === 'number') ? res.currentTime : 0;
                 const status = await NativeAudio.isPlaying({ audioId: 'main' });
                 receiverPlaying = Boolean(status.isPlaying);
             } catch(e) {}
@@ -1582,7 +1908,7 @@ export class SyncManager {
         } else if (absDriftMs <= 600) {
             // Gentle Rate Nudge (120ms to 600ms)
             const nowEpoch = Date.now();
-            if (nowEpoch - this.lastDriftAdjustmentEpoch > 2000) {
+            if (nowEpoch - this.lastDriftAdjustmentEpoch > 2500) {
                 this.lastDriftAdjustmentEpoch = nowEpoch;
                 this.isNudgeActive = true;
 
@@ -1599,17 +1925,18 @@ export class SyncManager {
                         this.applyPlaybackRate(1.0);
                         this.isNudgeActive = false;
                     }
-                }, 1800);
+                }, 1600);
             }
         } else {
             // Hard Seek Alignment (> 600ms)
-            console.log(`[LISTEN_TOGETHER_DRIFT] Large drift (${this.currentDriftMs}ms) -> Seeking to ${expectedHostPos.toFixed(2)}s`);
+            console.log(`[LISTEN_TOGETHER_DRIFT] Large drift (${this.currentDriftMs}ms) -> Seeking to ${expectedHostPos.toFixed(3)}s`);
             if (this.isNudgeActive) {
                 this.applyPlaybackRate(1.0);
                 this.isNudgeActive = false;
             }
+            this.lastSeekEpoch = Date.now();
             if (Capacitor.isNativePlatform() && window.player?.nativeInitialized) {
-                NativeAudio.seek({ audioId: 'main', timeInSeconds: Math.round(expectedHostPos) }).catch(() => {});
+                NativeAudio.seek({ audioId: 'main', timeInSeconds: expectedHostPos }).catch(() => {});
             } else if (window.player?.audio) {
                 window.player.audio.currentTime = expectedHostPos;
             }

@@ -25,6 +25,17 @@ import com.google.common.util.concurrent.MoreExecutors;
 import java.util.HashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import android.net.nsd.NsdManager;
+import android.net.nsd.NsdServiceInfo;
+import android.net.wifi.WifiManager;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import us.mediagrid.capacitorjs.plugins.nativeaudio.exceptions.DestroyNotAllowedException;
 
 @CapacitorPlugin(name = "AudioPlayer")
@@ -39,6 +50,20 @@ public class AudioPlayerPlugin extends Plugin {
     private AudioSources audioSources = new AudioSources();
     private HashMap<String, String> appOnStartCallbackIds = new HashMap<>();
     private HashMap<String, String> appOnStopCallbackIds = new HashMap<>();
+
+    // --- Local Wi-Fi Native Transport State ---
+    private static final String SERVICE_TYPE = "_machisync._tcp";
+    private ServerSocket localServerSocket;
+    private Socket activeLocalSocket;
+    private BufferedWriter localSocketWriter;
+    private NsdManager nsdManager;
+    private NsdManager.RegistrationListener localRegistrationListener;
+    private NsdManager.DiscoveryListener localDiscoveryListener;
+    private WifiManager.MulticastLock multicastLock;
+    private String activeLocalRoomCode;
+    private String localRole; // "HOST" | "RECEIVER"
+    private volatile boolean isLocalTransportRunning = false;
+    private volatile boolean isLocalConnecting = false;
 
     @Override
     public void load() {
@@ -782,10 +807,13 @@ public class AudioPlayerPlugin extends Plugin {
 
             postToLooper("seek", call, () -> {
                 Double doubleTime = call.getDouble("timeInSeconds");
-                Integer intTime = call.getInt("timeInSeconds");
-                long timeInSeconds = doubleTime != null ? Math.round(doubleTime) : (intTime != null ? intTime.longValue() : 0L);
-
-                audioSources.get(audioId(call)).seek(timeInSeconds);
+                if (doubleTime != null) {
+                    audioSources.get(audioId(call)).seek(doubleTime.doubleValue());
+                } else {
+                    Integer intTime = call.getInt("timeInSeconds");
+                    long timeInSeconds = intTime != null ? intTime.longValue() : 0L;
+                    audioSources.get(audioId(call)).seek(timeInSeconds);
+                }
 
                 call.resolve();
             });
@@ -985,6 +1013,7 @@ public class AudioPlayerPlugin extends Plugin {
     protected void handleOnDestroy() {
         Log.i(TAG, "Handling onDestroy");
 
+        cleanupLocalTransport();
         releaseMediaController();
         executorService.shutdownNow();
 
@@ -1158,5 +1187,509 @@ public class AudioPlayerPlugin extends Plugin {
             return (JSObject) obj;
         }
         return new JSObject(obj.toString());
+    }
+
+    // =========================================================================
+    // LOCAL WI-FI OFFLINE TRANSPORT (Android NSD + Direct TCP Socket)
+    // =========================================================================
+
+    private void acquireMulticastLock() {
+        try {
+            if (multicastLock == null) {
+                WifiManager wifi = (WifiManager) getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wifi != null) {
+                    multicastLock = wifi.createMulticastLock("MachiSyncMulticastLock");
+                    multicastLock.setReferenceCounted(true);
+                }
+            }
+            if (multicastLock != null && !multicastLock.isHeld()) {
+                multicastLock.acquire();
+                Log.d(TAG, "[LOCAL_WIFI] Acquired MulticastLock for NSD");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "[LOCAL_WIFI] Could not acquire MulticastLock: " + e.getMessage());
+        }
+    }
+
+    private void releaseMulticastLock() {
+        try {
+            if (multicastLock != null && multicastLock.isHeld()) {
+                multicastLock.release();
+                Log.d(TAG, "[LOCAL_WIFI] Released MulticastLock");
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "[LOCAL_WIFI] Error releasing MulticastLock: " + e.getMessage());
+        }
+    }
+
+    private synchronized void cleanupLocalTransport() {
+        isLocalTransportRunning = false;
+        isLocalConnecting = false;
+        activeLocalRoomCode = null;
+        localRole = null;
+
+        if (nsdManager != null && localRegistrationListener != null) {
+            try {
+                nsdManager.unregisterService(localRegistrationListener);
+                Log.d(TAG, "[LOCAL_WIFI] Unregistered NSD service");
+            } catch (Exception e) {
+                Log.w(TAG, "[LOCAL_WIFI] Error unregistering NSD service: " + e.getMessage());
+            }
+            localRegistrationListener = null;
+        }
+
+        if (nsdManager != null && localDiscoveryListener != null) {
+            try {
+                nsdManager.stopServiceDiscovery(localDiscoveryListener);
+                Log.d(TAG, "[LOCAL_WIFI] Stopped NSD discovery");
+            } catch (Exception e) {
+                Log.w(TAG, "[LOCAL_WIFI] Error stopping NSD discovery: " + e.getMessage());
+            }
+            localDiscoveryListener = null;
+        }
+
+        if (localSocketWriter != null) {
+            try { localSocketWriter.close(); } catch (Exception ignored) {}
+            localSocketWriter = null;
+        }
+
+        if (activeLocalSocket != null) {
+            try { activeLocalSocket.close(); } catch (Exception ignored) {}
+            activeLocalSocket = null;
+        }
+
+        if (localServerSocket != null) {
+            try { localServerSocket.close(); } catch (Exception ignored) {}
+            localServerSocket = null;
+        }
+
+        releaseMulticastLock();
+    }
+
+    @PluginMethod
+    public void isLocalTransportAvailable(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("available", true);
+        ret.put("platform", "android");
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void startLocalHost(PluginCall call) {
+        String roomCode = call.getString("roomCode");
+        if (roomCode == null || roomCode.trim().isEmpty()) {
+            call.reject("roomCode is required to start local host");
+            return;
+        }
+
+        executorService.execute(() -> {
+            try {
+                cleanupLocalTransport();
+                isLocalTransportRunning = true;
+                activeLocalRoomCode = roomCode.trim();
+                localRole = "HOST";
+
+                acquireMulticastLock();
+
+                // 1. Create ServerSocket on ephemeral port
+                localServerSocket = new ServerSocket(0);
+                int port = localServerSocket.getLocalPort();
+                Log.i(TAG, "[LOCAL_WIFI] Host ServerSocket opened on port: " + port);
+
+                // 2. Register with Android NSD
+                nsdManager = (NsdManager) getContext().getSystemService(Context.NSD_SERVICE);
+                NsdServiceInfo serviceInfo = new NsdServiceInfo();
+                String serviceName = "MachiSync_" + activeLocalRoomCode + "_" + port;
+                serviceInfo.setServiceName(serviceName);
+                serviceInfo.setServiceType(SERVICE_TYPE);
+                serviceInfo.setPort(port);
+
+                localRegistrationListener = new NsdManager.RegistrationListener() {
+                    @Override
+                    public void onServiceRegistered(NsdServiceInfo nsdServiceInfo) {
+                        Log.i(TAG, "[LOCAL_WIFI] NSD Service registered: " + nsdServiceInfo.getServiceName());
+                        JSObject statusObj = new JSObject();
+                        statusObj.put("status", "WAITING");
+                        statusObj.put("role", "HOST");
+                        statusObj.put("serviceName", nsdServiceInfo.getServiceName());
+                        statusObj.put("port", port);
+                        notifyListeners("localTransportStatus", statusObj);
+                    }
+
+                    @Override
+                    public void onRegistrationFailed(NsdServiceInfo nsdServiceInfo, int errorCode) {
+                        Log.e(TAG, "[LOCAL_WIFI] NSD registration failed with error: " + errorCode);
+                        JSObject statusObj = new JSObject();
+                        statusObj.put("status", "ERROR");
+                        statusObj.put("message", "NSD registration failed: code " + errorCode);
+                        notifyListeners("localTransportStatus", statusObj);
+                    }
+
+                    @Override
+                    public void onServiceUnregistered(NsdServiceInfo nsdServiceInfo) {
+                        Log.i(TAG, "[LOCAL_WIFI] NSD Service unregistered");
+                    }
+
+                    @Override
+                    public void onUnregistrationFailed(NsdServiceInfo nsdServiceInfo, int errorCode) {
+                        Log.w(TAG, "[LOCAL_WIFI] NSD unregistration failed: " + errorCode);
+                    }
+                };
+
+                nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, localRegistrationListener);
+
+                // 3. Start listening for incoming client connection on background thread
+                executorService.execute(() -> {
+                    while (isLocalTransportRunning && localServerSocket != null && !localServerSocket.isClosed()) {
+                        try {
+                            Log.i(TAG, "[LOCAL_WIFI] Host waiting for client accept...");
+                            Socket client = localServerSocket.accept();
+                            client.setTcpNoDelay(true);
+
+                            if (!isLocalTransportRunning) {
+                                try { client.close(); } catch (Exception ignored) {}
+                                break;
+                            }
+
+                            handleConnectedClient(client);
+                        } catch (Exception e) {
+                            if (isLocalTransportRunning && localServerSocket != null && !localServerSocket.isClosed()) {
+                                Log.e(TAG, "[LOCAL_WIFI] ServerSocket accept error: " + e.getMessage());
+                            }
+                        }
+                    }
+                });
+
+                JSObject res = new JSObject();
+                res.put("success", true);
+                res.put("port", port);
+                call.resolve(res);
+
+            } catch (Exception e) {
+                Log.e(TAG, "[LOCAL_WIFI] Error starting local host: " + e.getMessage(), e);
+                cleanupLocalTransport();
+                call.reject("Failed to start local host: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    private void handleConnectedClient(Socket client) {
+        executorService.execute(() -> {
+            try {
+                Log.i(TAG, "[LOCAL_WIFI] Incoming client connected from " + client.getRemoteSocketAddress());
+                BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
+                BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(client.getOutputStream(), StandardCharsets.UTF_8));
+
+                // Read authentication handshake line
+                String authLine = reader.readLine();
+                if (authLine == null) {
+                    client.close();
+                    return;
+                }
+
+                JSONObject authJson = new JSONObject(authLine);
+                String clientCode = authJson.optString("roomCode");
+                if (!activeLocalRoomCode.equals(clientCode)) {
+                    Log.w(TAG, "[LOCAL_WIFI] Client room code mismatch: got " + clientCode + ", expected " + activeLocalRoomCode);
+                    JSONObject failResp = new JSONObject();
+                    failResp.put("type", "AUTH_FAIL");
+                    failResp.put("reason", "Room code mismatch");
+                    writer.write(failResp.toString() + "\n");
+                    writer.flush();
+                    client.close();
+                    return;
+                }
+
+                // Authenticated successfully!
+                JSONObject okResp = new JSONObject();
+                okResp.put("type", "AUTH_OK");
+                okResp.put("role", "HOST");
+                writer.write(okResp.toString() + "\n");
+                writer.flush();
+
+                synchronized (this) {
+                    if (activeLocalSocket != null && !activeLocalSocket.isClosed()) {
+                        try { activeLocalSocket.close(); } catch (Exception ignored) {}
+                    }
+                    activeLocalSocket = client;
+                    localSocketWriter = writer;
+                }
+
+                JSObject statusObj = new JSObject();
+                statusObj.put("status", "CONNECTED");
+                statusObj.put("role", "HOST");
+                statusObj.put("remoteAddress", client.getRemoteSocketAddress().toString());
+                notifyListeners("localTransportStatus", statusObj);
+
+                // Message read loop
+                listenToSocketMessages(reader);
+
+            } catch (Exception e) {
+                if (isLocalTransportRunning) {
+                    Log.e(TAG, "[LOCAL_WIFI] ServerSocket client error: " + e.getMessage());
+                    JSObject statusObj = new JSObject();
+                    statusObj.put("status", "DISCONNECTED");
+                    statusObj.put("role", "HOST");
+                    statusObj.put("message", e.getMessage());
+                    notifyListeners("localTransportStatus", statusObj);
+                }
+            }
+        });
+    }
+
+    @PluginMethod
+    public void startLocalReceiver(PluginCall call) {
+        String roomCode = call.getString("roomCode");
+        if (roomCode == null || roomCode.trim().isEmpty()) {
+            call.reject("roomCode is required to join local room");
+            return;
+        }
+
+        executorService.execute(() -> {
+            try {
+                cleanupLocalTransport();
+                isLocalTransportRunning = true;
+                isLocalConnecting = false;
+                activeLocalRoomCode = roomCode.trim();
+                localRole = "RECEIVER";
+
+                acquireMulticastLock();
+
+                nsdManager = (NsdManager) getContext().getSystemService(Context.NSD_SERVICE);
+
+                JSObject connectingObj = new JSObject();
+                connectingObj.put("status", "CONNECTING");
+                connectingObj.put("role", "RECEIVER");
+                connectingObj.put("message", "Discovering host on local Wi-Fi...");
+                notifyListeners("localTransportStatus", connectingObj);
+
+                localDiscoveryListener = new NsdManager.DiscoveryListener() {
+                    @Override
+                    public void onStartDiscoveryFailed(String serviceType, int errorCode) {
+                        Log.e(TAG, "[LOCAL_WIFI] Discovery failed to start: " + errorCode);
+                        JSObject statusObj = new JSObject();
+                        statusObj.put("status", "ERROR");
+                        statusObj.put("message", "Discovery failed: code " + errorCode);
+                        notifyListeners("localTransportStatus", statusObj);
+                    }
+
+                    @Override
+                    public void onStopDiscoveryFailed(String serviceType, int errorCode) {
+                        Log.w(TAG, "[LOCAL_WIFI] Stop discovery failed: " + errorCode);
+                    }
+
+                    @Override
+                    public void onDiscoveryStarted(String serviceType) {
+                        Log.i(TAG, "[LOCAL_WIFI] NSD Discovery started for type: " + serviceType);
+                    }
+
+                    @Override
+                    public void onDiscoveryStopped(String serviceType) {
+                        Log.i(TAG, "[LOCAL_WIFI] NSD Discovery stopped");
+                    }
+
+                    @Override
+                    public void onServiceFound(NsdServiceInfo serviceInfo) {
+                        Log.i(TAG, "[LOCAL_WIFI] Service found: " + serviceInfo.getServiceName());
+                        String name = serviceInfo.getServiceName();
+                        if (name != null && activeLocalRoomCode != null && name.contains(activeLocalRoomCode) && !isLocalConnecting) {
+                            isLocalConnecting = true;
+                            Log.i(TAG, "[LOCAL_WIFI] Matching service found: " + name + ". Resolving...");
+
+                            try {
+                                nsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
+                                    @Override
+                                    public void onResolveFailed(NsdServiceInfo nsdServiceInfo, int errorCode) {
+                                        Log.e(TAG, "[LOCAL_WIFI] Resolve failed: " + errorCode);
+                                        isLocalConnecting = false;
+                                    }
+
+                                    @Override
+                                    public void onServiceResolved(NsdServiceInfo resolvedService) {
+                                        if (resolvedService == null || resolvedService.getHost() == null) {
+                                            Log.w(TAG, "[LOCAL_WIFI] Resolved service or host is null");
+                                            isLocalConnecting = false;
+                                            return;
+                                        }
+                                        Log.i(TAG, "[LOCAL_WIFI] Service resolved: " + resolvedService.getHost() + ":" + resolvedService.getPort());
+                                        connectToHost(resolvedService.getHost().getHostAddress(), resolvedService.getPort());
+                                    }
+                                });
+                            } catch (Exception ex) {
+                                Log.e(TAG, "[LOCAL_WIFI] Error calling resolveService: " + ex.getMessage());
+                                isLocalConnecting = false;
+                            }
+                        }
+                    }
+
+                    @Override
+                    public void onServiceLost(NsdServiceInfo serviceInfo) {
+                        Log.w(TAG, "[LOCAL_WIFI] Service lost: " + serviceInfo.getServiceName());
+                    }
+                };
+
+                nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, localDiscoveryListener);
+
+                // Hotspot DHCP Gateway fallback check: If on a Wi-Fi Hotspot without mDNS routing
+                executorService.execute(() -> {
+                    try {
+                        Thread.sleep(4000);
+                        if (isLocalTransportRunning && activeLocalSocket == null && !isLocalConnecting) {
+                            WifiManager wifi = (WifiManager) getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                            if (wifi != null) {
+                                android.net.DhcpInfo dhcp = wifi.getDhcpInfo();
+                                if (dhcp != null && dhcp.gateway != 0) {
+                                    int g = dhcp.gateway;
+                                    String gatewayIp = String.format(java.util.Locale.US, "%d.%d.%d.%d", (g & 0xff), (g >> 8 & 0xff), (g >> 16 & 0xff), (g >> 24 & 0xff));
+                                    Log.i(TAG, "[LOCAL_WIFI] Probing Hotspot DHCP gateway IP: " + gatewayIp);
+                                }
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                });
+
+                JSObject res = new JSObject();
+                res.put("success", true);
+                call.resolve(res);
+
+            } catch (Exception e) {
+                Log.e(TAG, "[LOCAL_WIFI] Error starting receiver: " + e.getMessage(), e);
+                cleanupLocalTransport();
+                call.reject("Failed to start local receiver: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    private void connectToHost(String hostAddress, int port) {
+        executorService.execute(() -> {
+            try {
+                Log.i(TAG, "[LOCAL_WIFI] Connecting to host at " + hostAddress + ":" + port);
+                Socket socket = new Socket(hostAddress, port);
+                socket.setTcpNoDelay(true);
+
+                BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+                BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
+
+                // Send authentication handshake
+                JSONObject authReq = new JSONObject();
+                authReq.put("type", "AUTH_JOIN");
+                authReq.put("roomCode", activeLocalRoomCode);
+                writer.write(authReq.toString() + "\n");
+                writer.flush();
+
+                // Wait for AUTH_OK
+                String responseLine = reader.readLine();
+                if (responseLine == null) {
+                    socket.close();
+                    throw new IOException("Host closed connection during authentication");
+                }
+
+                JSONObject respJson = new JSONObject(responseLine);
+                if (!"AUTH_OK".equals(respJson.optString("type"))) {
+                    socket.close();
+                    throw new IOException("Authentication rejected by host: " + respJson.optString("reason"));
+                }
+
+                Log.i(TAG, "[LOCAL_WIFI] Successfully authenticated with Host!");
+                isLocalConnecting = false;
+                synchronized (this) {
+                    activeLocalSocket = socket;
+                    localSocketWriter = writer;
+                }
+
+                JSObject statusObj = new JSObject();
+                statusObj.put("status", "CONNECTED");
+                statusObj.put("role", "RECEIVER");
+                statusObj.put("host", hostAddress);
+                statusObj.put("port", port);
+                notifyListeners("localTransportStatus", statusObj);
+
+                // Stop discovery once connected
+                if (nsdManager != null && localDiscoveryListener != null) {
+                    try {
+                        nsdManager.stopServiceDiscovery(localDiscoveryListener);
+                        localDiscoveryListener = null;
+                    } catch (Exception ignored) {}
+                }
+
+                // Message read loop
+                listenToSocketMessages(reader);
+
+            } catch (Exception e) {
+                isLocalConnecting = false;
+                Log.e(TAG, "[LOCAL_WIFI] Connection to host failed: " + e.getMessage());
+                if (isLocalTransportRunning) {
+                    JSObject statusObj = new JSObject();
+                    statusObj.put("status", "DISCONNECTED");
+                    statusObj.put("role", "RECEIVER");
+                    statusObj.put("message", e.getMessage());
+                    notifyListeners("localTransportStatus", statusObj);
+                }
+            }
+        });
+    }
+
+    private void listenToSocketMessages(BufferedReader reader) {
+        try {
+            String line;
+            while (isLocalTransportRunning && (line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+                JSObject msgObj = new JSObject();
+                msgObj.put("message", line);
+                notifyListeners("localMessageReceived", msgObj);
+            }
+        } catch (Exception e) {
+            if (isLocalTransportRunning) {
+                Log.w(TAG, "[LOCAL_WIFI] Socket read error / EOF: " + e.getMessage());
+            }
+        } finally {
+            if (isLocalTransportRunning) {
+                JSObject statusObj = new JSObject();
+                statusObj.put("status", "DISCONNECTED");
+                statusObj.put("role", localRole);
+                statusObj.put("message", "Connection closed by remote peer");
+                notifyListeners("localTransportStatus", statusObj);
+            }
+        }
+    }
+
+    @PluginMethod
+    public void sendLocalMessage(PluginCall call) {
+        String message = call.getString("message");
+        if (message == null) {
+            call.reject("message parameter is required");
+            return;
+        }
+
+        executorService.execute(() -> {
+            try {
+                synchronized (this) {
+                    if (localSocketWriter != null) {
+                        localSocketWriter.write(message + "\n");
+                        localSocketWriter.flush();
+                        call.resolve();
+                        return;
+                    }
+                }
+                call.reject("No active local socket connection");
+            } catch (Exception e) {
+                Log.e(TAG, "[LOCAL_WIFI] Error sending local message: " + e.getMessage());
+                call.reject("Failed to send message: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void stopLocalTransport(PluginCall call) {
+        executorService.execute(() -> {
+            cleanupLocalTransport();
+            JSObject statusObj = new JSObject();
+            statusObj.put("status", "DISCONNECTED");
+            statusObj.put("role", "NONE");
+            notifyListeners("localTransportStatus", statusObj);
+            if (call != null) {
+                call.resolve();
+            }
+        });
     }
 }

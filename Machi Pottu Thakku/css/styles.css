@@ -2516,6 +2516,68 @@ body {
     color: var(--primary-text);
 }
 
+.sync-lan-box {
+    background: rgba(255, 107, 0, 0.06);
+    border: 1px solid rgba(255, 107, 0, 0.25);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+}
+
+.sync-lan-header {
+    display: flex;
+    align-items: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--primary-text);
+    margin-bottom: 4px;
+}
+
+.sync-lan-desc {
+    font-size: 11px;
+    color: var(--secondary-text);
+    line-height: 1.4;
+    margin-bottom: 8px;
+}
+
+.sync-lan-desc code {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 2px 5px;
+    border-radius: 4px;
+    color: var(--primary-text);
+}
+
+.sync-lan-input-row {
+    display: flex;
+    gap: 8px;
+}
+
+.sync-lan-input {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--primary-text);
+    font-size: 13px;
+    outline: none;
+}
+
+.sync-lan-input:focus {
+    border-color: var(--accent-color);
+}
+
+.sync-lan-save-btn {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: var(--primary-text);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
 .sync-card {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.07);

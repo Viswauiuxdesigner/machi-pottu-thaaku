@@ -678,6 +678,7 @@ class AudioPlayer {
             }
 
             // Set single item queue for receiver sync
+            this.nativeReady = false;
             await NativeAudio.setQueue({
                 audioId: 'main',
                 items: [nativeItem],
@@ -686,13 +687,30 @@ class AudioPlayer {
             });
 
             await NativeAudio.pause({ audioId: 'main' });
-            await NativeAudio.seek({ audioId: 'main', timeInSeconds: 0 });
+            await NativeAudio.seek({ audioId: 'main', timeInSeconds: 0.0 });
             this.currentNativeSource = finalUrl;
             this.currentNativeTrackId = String(track.id);
             this.saveLastPlayedTrack(track);
 
             this.applyNativeAudioEq().catch(() => {});
             this.applyNativeSpatialAudio().catch(() => {});
+
+            // Genuinely wait for NativeAudio readiness confirmation
+            const nativeReadyPromise = new Promise((resolve) => {
+                if (this.nativeReady) return resolve(true);
+                const checkInterval = setInterval(() => {
+                    if (this.nativeReady) {
+                        clearInterval(checkInterval);
+                        clearTimeout(timeoutTimer);
+                        resolve(true);
+                    }
+                }, 50);
+                const timeoutTimer = setTimeout(() => {
+                    clearInterval(checkInterval);
+                    resolve(true); // Fallback after 6s
+                }, 6000);
+            });
+            await nativeReadyPromise;
         } else if (this.audio) {
             this.audio.src = finalUrl;
             this.audio.pause();
@@ -700,6 +718,38 @@ class AudioPlayer {
             this.saveLastPlayedTrack(track);
             this.applyWebAudioEq();
             this.applyWebAudioSpatial();
+
+            // Genuinely wait for HTML5 audio readiness confirmation
+            const webReadyPromise = new Promise((resolve, reject) => {
+                if (this.audio.readyState >= 3) {
+                    return resolve(true);
+                }
+                const onCanPlay = () => {
+                    cleanup();
+                    resolve(true);
+                };
+                const onError = (e) => {
+                    cleanup();
+                    reject(new Error("Audio load error: " + (e?.message || "network")));
+                };
+                const timeout = setTimeout(() => {
+                    cleanup();
+                    resolve(true);
+                }, 6000);
+                const cleanup = () => {
+                    this.audio.removeEventListener('canplay', onCanPlay);
+                    this.audio.removeEventListener('error', onError);
+                    clearTimeout(timeout);
+                };
+                this.audio.addEventListener('canplay', onCanPlay);
+                this.audio.addEventListener('error', onError);
+            });
+            try {
+                await webReadyPromise;
+            } catch (loadErr) {
+                console.error("[SYNC] HTML5 audio readiness failed:", loadErr);
+                return false;
+            }
         }
 
         this.syncUIState(false);

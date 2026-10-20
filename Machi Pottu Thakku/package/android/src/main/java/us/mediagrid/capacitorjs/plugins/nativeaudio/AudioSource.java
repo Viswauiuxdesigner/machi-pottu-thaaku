@@ -1263,6 +1263,10 @@ public class AudioSource extends Binder {
         getPlayer().seekTo(timeInSeconds * 1000);
     }
 
+    public void seek(double timeInSeconds) {
+        getPlayer().seekTo((long) (timeInSeconds * 1000.0));
+    }
+
     public void stop() {
         releaseTransitionWakeLock();
         setIsStopped();

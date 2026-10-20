@@ -510,12 +510,24 @@
                 <div class="drawer-body">
                     <!-- Transport Mode Selector -->
                     <div class="sync-transport-selector">
-                        <button id="sync-mode-internet" class="sync-mode-tab active">
-                            <i data-lucide="globe" style="width: 14px; height: 14px; margin-right: 4px;"></i> Internet P2P
+                        <button id="sync-mode-internet" class="sync-mode-tab active" title="Direct peer-to-peer over internet or same Wi-Fi router">
+                            <i data-lucide="globe" style="width: 14px; height: 14px; margin-right: 4px;"></i> Same Wi-Fi / Internet
                         </button>
-                        <button id="sync-mode-local" class="sync-mode-tab">
-                            <i data-lucide="wifi" style="width: 14px; height: 14px; margin-right: 4px;"></i> Local Wi-Fi (Coming Soon)
+                        <button id="sync-mode-local" class="sync-mode-tab" title="Offline LAN / Hotspot mode">
+                            <i data-lucide="wifi" style="width: 14px; height: 14px; margin-right: 4px;"></i> Offline LAN / Hotspot
                         </button>
+                    </div>
+
+                    <!-- Offline LAN / Hotspot Configuration Block -->
+                    <div id="sync-lan-config-section" class="sync-lan-box" style="display: none;">
+                        <div class="sync-lan-header">
+                            <i data-lucide="wifi" style="width: 15px; height: 15px; color: var(--accent-color); margin-right: 6px;"></i>
+                            <span>Offline Local Wi-Fi / Hotspot Mode</span>
+                        </div>
+                        <p class="sync-lan-desc">Uses <strong>Android Network Service Discovery (mDNS)</strong> and direct local TCP sockets. Connect both phones to the same Wi-Fi network or mobile hotspot. <em>No internet access or external signaling server required.</em></p>
+                        <div id="sync-lan-web-notice" style="display: none; font-size: 11px; color: #ffb74d; margin-top: 4px;">
+                            * Note: Offline NSD discovery requires the Android app. On web browsers, please use Same Wi-Fi / Internet mode.
+                        </div>
                     </div>
 
                     <!-- NOT IN ROOM SECTION -->
