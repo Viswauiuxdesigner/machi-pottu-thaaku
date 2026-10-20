@@ -544,6 +544,9 @@ export class SyncManager {
         this.lastDriftAdjustmentEpoch = 0;
         this.isNudgeActive = false;
 
+        this.scheduledPlayTimer = null;
+        this.isExecutingPlay = false;
+
         this.stateListeners = new Set();
         this.statsListeners = new Set();
 
@@ -913,6 +916,11 @@ export class SyncManager {
             this.pendingTrackChangeTimeout = null;
         }
 
+        if (this.scheduledPlayTimer) {
+            clearTimeout(this.scheduledPlayTimer);
+            this.scheduledPlayTimer = null;
+        }
+
         if (notifyPeer && this.transport) {
             try {
                 this.transport.send({
@@ -1086,6 +1094,11 @@ export class SyncManager {
                     this.handleHeartbeat(data);
                 }
                 break;
+            case 'REPEAT_MODE':
+                if (this.role === SyncRole.RECEIVER) {
+                    this.handleRepeatMode(data);
+                }
+                break;
             default:
                 console.warn("[LISTEN_TOGETHER] Unknown packet type:", data.type);
         }
@@ -1224,6 +1237,24 @@ export class SyncManager {
         });
     }
 
+    broadcastRepeatMode(mode) {
+        if (!this.isHost() || !this.transport) return;
+        this.currentSeq++;
+        this.transport.send({
+            type: 'REPEAT_MODE',
+            mode,
+            seq: this.currentSeq
+        });
+    }
+
+    handleRepeatMode(data) {
+        if (!data || !data.mode) return;
+        console.log("[LISTEN_TOGETHER] Host updated repeat mode:", data.mode);
+        if (window.player && typeof window.player.setRepeatMode === 'function') {
+            window.player.setRepeatMode(data.mode);
+        }
+    }
+
     startHeartbeat() {
         this.stopHeartbeat();
         this.heartbeatTimer = setInterval(async () => {
@@ -1308,6 +1339,11 @@ export class SyncManager {
     }
 
     handleScheduledPlay(data) {
+        if (this.scheduledPlayTimer) {
+            clearTimeout(this.scheduledPlayTimer);
+            this.scheduledPlayTimer = null;
+        }
+
         const { position, scheduledStartEpoch } = data;
         const now = this.clockSync.getSynchronizedNow();
         const delayMs = scheduledStartEpoch - now;
@@ -1315,7 +1351,8 @@ export class SyncManager {
         console.log(`[LISTEN_TOGETHER] Receiver scheduled play: delay=${delayMs}ms at pos=${position}s`);
 
         if (delayMs > 0) {
-            setTimeout(() => {
+            this.scheduledPlayTimer = setTimeout(() => {
+                this.scheduledPlayTimer = null;
                 this.executePlay(position);
             }, delayMs);
         } else {
@@ -1325,11 +1362,17 @@ export class SyncManager {
     }
 
     scheduleLocalPlay(position, scheduledStartEpoch) {
+        if (this.scheduledPlayTimer) {
+            clearTimeout(this.scheduledPlayTimer);
+            this.scheduledPlayTimer = null;
+        }
+
         const now = this.clockSync.getSynchronizedNow();
         const delayMs = scheduledStartEpoch - now;
 
         if (delayMs > 0) {
-            setTimeout(() => {
+            this.scheduledPlayTimer = setTimeout(() => {
+                this.scheduledPlayTimer = null;
                 this.executePlay(position);
             }, delayMs);
         } else {
@@ -1339,27 +1382,38 @@ export class SyncManager {
 
     async executePlay(targetPosition) {
         if (!window.player) return;
+        if (this.isExecutingPlay) {
+            console.log("[LISTEN_TOGETHER] Playback execution already in flight, debouncing duplicate invocation");
+            return;
+        }
+        this.isExecutingPlay = true;
 
-        if (Capacitor.isNativePlatform() && window.player.nativeInitialized) {
-            try {
-                if (typeof targetPosition === 'number' && targetPosition > 0) {
-                    await NativeAudio.seek({ audioId: 'main', timeInSeconds: Math.round(targetPosition) });
+        try {
+            if (Capacitor.isNativePlatform() && window.player.nativeInitialized) {
+                try {
+                    if (typeof targetPosition === 'number' && targetPosition > 0) {
+                        await NativeAudio.seek({ audioId: 'main', timeInSeconds: Math.round(targetPosition) });
+                    }
+                    await NativeAudio.play({ audioId: 'main' });
+                    window.player.syncUIState(true);
+                } catch(e) {
+                    console.error("[LISTEN_TOGETHER] Native executePlay error", e);
                 }
-                await NativeAudio.play({ audioId: 'main' });
-                window.player.syncUIState(true);
-            } catch(e) {
-                console.error("[LISTEN_TOGETHER] Native executePlay error", e);
-            }
-        } else if (window.player.audio) {
-            try {
-                if (typeof targetPosition === 'number' && targetPosition > 0) {
-                    window.player.audio.currentTime = targetPosition;
+            } else if (window.player.audio) {
+                try {
+                    if (typeof targetPosition === 'number' && targetPosition > 0) {
+                        window.player.audio.currentTime = targetPosition;
+                    }
+                    await window.player.audio.play();
+                    window.player.syncUIState(true);
+                } catch(e) {
+                    console.error("[LISTEN_TOGETHER] Web executePlay error", e);
                 }
-                await window.player.audio.play();
-                window.player.syncUIState(true);
-            } catch(e) {
-                console.error("[LISTEN_TOGETHER] Web executePlay error", e);
             }
+        } finally {
+            setTimeout(() => {
+                this.isExecutingPlay = false;
+            }, 300);
         }
     }
 

@@ -48,20 +48,60 @@ self.addEventListener('install', event => {
 
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(cacheNames => {
-      return Promise.all(
-        cacheNames.filter(name => {
-          return name !== CACHE_NAME;
-        }).map(name => {
-          return caches.delete(name);
-        })
+    caches.keys().then(async cacheNames => {
+      // 1. Delete old cache versions
+      await Promise.all(
+        cacheNames.filter(name => name !== CACHE_NAME).map(name => caches.delete(name))
       );
+
+      // 2. Prune any duplicate audio/media blobs in current cache to reclaim storage
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        const requests = await cache.keys();
+        for (const req of requests) {
+          const reqUrl = req.url.toLowerCase();
+          if (reqUrl.includes('_capacitor_file_') ||
+              reqUrl.includes('/music-play') ||
+              reqUrl.endsWith('.mp3') ||
+              reqUrl.endsWith('.m4a') ||
+              reqUrl.endsWith('.wav') ||
+              reqUrl.endsWith('.aac') ||
+              reqUrl.endsWith('.flac') ||
+              reqUrl.endsWith('.ogg')) {
+            await cache.delete(req);
+          }
+        }
+      } catch (err) {
+        console.warn('[SW] Cache audio cleanup error:', err);
+      }
     })
   );
   self.clients.claim();
 });
 
 self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
+  const url = event.request.url.toLowerCase();
+  const isAudioOrMedia = event.request.destination === 'audio' ||
+                         event.request.destination === 'video' ||
+                         url.includes('_capacitor_file_') ||
+                         url.includes('/music-play') ||
+                         url.endsWith('.mp3') ||
+                         url.endsWith('.m4a') ||
+                         url.endsWith('.wav') ||
+                         url.endsWith('.aac') ||
+                         url.endsWith('.flac') ||
+                         url.endsWith('.ogg');
+
+  // Media files must NEVER be stored in Chromium CacheStorage to prevent massive disk bloat.
+  // They are managed strictly via Filesystem / ExoPlayer.
+  if (isAudioOrMedia) {
+    return;
+  }
+
   // Network-first for songs.json
   if (event.request.url.includes('/data/songs.json')) {
     event.respondWith(
@@ -100,7 +140,7 @@ self.addEventListener('fetch', event => {
     return;
   }
   
-  // Cache-first for everything else
+  // Cache-first for static assets only (HTML, CSS, images, fonts)
   event.respondWith(
     caches.match(event.request)
       .then(response => {
@@ -109,7 +149,11 @@ self.addEventListener('fetch', event => {
         }
         return fetch(event.request).then(
           function(response) {
-            if(!response || response.status !== 200 || response.type !== 'basic') {
+            if (!response || response.status !== 200 || response.type !== 'basic') {
+              return response;
+            }
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.startsWith('audio/') || contentType.startsWith('video/')) {
               return response;
             }
             var responseToCache = response.clone();

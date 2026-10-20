@@ -747,6 +747,13 @@ class App {
         const countEl = document.getElementById('downloads-count');
         if (countEl) {
             countEl.textContent = `Downloaded Songs (${tracks.length})`;
+            if (window.OfflineManager && typeof window.OfflineManager.getStorageStats === 'function') {
+                window.OfflineManager.getStorageStats().then(stats => {
+                    if (stats && countEl) {
+                        countEl.textContent = `Downloaded Songs (${tracks.length}) • ${stats.formattedTotal}`;
+                    }
+                }).catch(() => {});
+            }
         }
 
         let sortedTracks = [...tracks];

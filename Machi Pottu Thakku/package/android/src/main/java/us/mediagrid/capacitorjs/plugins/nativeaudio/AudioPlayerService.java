@@ -572,132 +572,31 @@ public class AudioPlayerService extends MediaSessionService {
         }
 
         private void applySettings() {
-            if (!isAvailable || equalizer == null) {
-                Log.d(TAG, "applySettings skipped: isAvailable=" + isAvailable + ", equalizer=" + (equalizer != null));
-                return;
-            }
-            try {
-                if (!isEnabled) {
+            // Processing is handled authoritatively by SpatialAudioProcessor (Native PCM Biquad EQ)
+            // to ensure uninterrupted playback with screen off and across track changes without double-filtering.
+            if (equalizer != null) {
+                try {
                     equalizer.setEnabled(false);
-                    if (bassBoost != null) {
-                        bassBoost.setEnabled(false);
-                    }
-                    Log.i(TAG, "Equalizer and BassBoost disabled (bypassed)");
-                    return;
-                }
-
-                equalizer.setEnabled(true);
-                if (bassBoost != null) {
-                    bassBoost.setEnabled(true);
-                }
-
-                short numBands = equalizer.getNumberOfBands();
-                if (numBands <= 0) return;
-
-                short[] bandRange = equalizer.getBandLevelRange(); // e.g., -1500 to +1500 mB
-                short minLevel = bandRange[0];
-                short maxLevel = bandRange[1];
-
-                // Calculate target gains in millibels (50 is 0 mB flat)
-                short bassGain = calcGain(bassValue, minLevel, maxLevel);
-                short midGain = calcGain(midValue, minLevel, maxLevel);
-                short trebleGain = calcGain(trebleValue, minLevel, maxLevel);
-
-                // Map each hardware band to its acoustic role based on real center frequency
-                for (short i = 0; i < numBands; i++) {
-                    short targetLevel;
-                    int freqHz = -1;
-                    try {
-                        freqHz = equalizer.getCenterFreq(i) / 1000;
-                    } catch (Exception ignored) {}
-
-                    if (freqHz > 0) {
-                        if (freqHz < 350) {
-                            // Sub-bass and bass (< 350 Hz): e.g. 60Hz, 230Hz
-                            targetLevel = bassGain;
-                        } else if (freqHz <= 2500) {
-                            // Midrange / Vocals (350Hz - 2.5kHz): e.g. 910Hz, 1kHz
-                            targetLevel = midGain;
-                        } else {
-                            // Highs / Treble (> 2.5kHz): e.g. 3.6kHz, 4kHz, 14kHz
-                            targetLevel = trebleGain;
-                        }
-                    } else {
-                        // Positional fallback if getCenterFreq is unavailable
-                        if (numBands == 5) {
-                            if (i <= 1) targetLevel = bassGain;
-                            else if (i == 2) targetLevel = midGain;
-                            else targetLevel = trebleGain;
-                        } else {
-                            if (i < numBands / 3) {
-                                targetLevel = bassGain;
-                            } else if (i < (2 * numBands) / 3) {
-                                targetLevel = midGain;
-                            } else {
-                                targetLevel = trebleGain;
-                            }
-                        }
-                    }
-
-                    // Clamp to device band range
-                    if (targetLevel < minLevel) targetLevel = minLevel;
-                    if (targetLevel > maxLevel) targetLevel = maxLevel;
-
-                    equalizer.setBandLevel(i, targetLevel);
-                    Log.d(TAG, "Band " + i + " (" + (freqHz > 0 ? freqHz + "Hz" : "pos " + i) + ") set to " + targetLevel + " mB");
-                }
-
-                // BassBoost hardware effect
-                if (bassBoost != null && bassBoost.getStrengthSupported()) {
-                    short boostStrength = (short) Math.min(1000, Math.max(0, (bassValue - 50) * 20));
-                    bassBoost.setStrength(boostStrength);
-                    Log.d(TAG, "BassBoost strength set to " + boostStrength);
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Error applying audio effect settings", e);
+                } catch (Exception ignored) {}
+            }
+            if (bassBoost != null) {
+                try {
+                    bassBoost.setEnabled(false);
+                } catch (Exception ignored) {}
             }
         }
 
         private void applySpatialSettings() {
-            if (!isAvailable) {
-                Log.d(TAG, "applySpatialSettings skipped: isAvailable=false");
-                return;
+            // Processing is handled authoritatively by SpatialAudioProcessor in ExoPlayer PCM chain
+            if (virtualizer != null) {
+                try {
+                    virtualizer.setEnabled(false);
+                } catch (Exception ignored) {}
             }
-            try {
-                if (virtualizer != null) {
-                    virtualizer.setEnabled(spatialEnabled);
-                    if (spatialEnabled && virtualizer.getStrengthSupported()) {
-                        int effectiveStrength = (int) Math.round((spatialIntensity / 100.0f) * (spatialWidth / 100.0f) * 1000.0f);
-                        effectiveStrength = Math.max(0, Math.min(1000, effectiveStrength));
-                        virtualizer.setStrength((short) effectiveStrength);
-                        Log.d(TAG, "Virtualizer strength set to " + effectiveStrength);
-                    }
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Error applying virtualizer settings", e);
-            }
-
-            try {
-                if (presetReverb != null) {
-                    if (!spatialEnabled || spatialDistance <= 10) {
-                        presetReverb.setEnabled(false);
-                        presetReverb.setPreset(PresetReverb.PRESET_NONE);
-                    } else {
-                        presetReverb.setEnabled(true);
-                        short preset;
-                        if (spatialDistance < 40) {
-                            preset = PresetReverb.PRESET_SMALLROOM;
-                        } else if (spatialDistance < 70) {
-                            preset = PresetReverb.PRESET_MEDIUMHALL;
-                        } else {
-                            preset = PresetReverb.PRESET_LARGEHALL;
-                        }
-                        presetReverb.setPreset(preset);
-                        Log.d(TAG, "PresetReverb preset set to " + preset);
-                    }
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Error applying presetReverb settings", e);
+            if (presetReverb != null) {
+                try {
+                    presetReverb.setEnabled(false);
+                } catch (Exception ignored) {}
             }
         }
 
@@ -871,12 +770,30 @@ public class AudioPlayerService extends MediaSessionService {
         private ByteBuffer outputBuffer;
         private boolean inputEnded;
 
-        // Thread-safe DSP parameters (0..100 or 0..360)
+        // Thread-safe Spatial Audio parameters (0..100 or 0..360)
         private volatile boolean spatialEnabled = false;
         private volatile int intensity = 75; // 0..100
         private volatile int width = 80;     // 0..100
         private volatile int distance = 40;  // 0..100
         private volatile int azimuth = 0;    // 0..360 degrees
+        private volatile boolean autoOrbit = false;
+        private double fractionalAzimuth = 0.0;
+
+        // 3-Band Parametric Biquad Equalizer Parameters (0..100, 50 = flat 0dB)
+        private volatile boolean eqEnabled = true;
+        private volatile int bassLevel = 50;
+        private volatile int midLevel = 50;
+        private volatile int trebleLevel = 50;
+
+        // Biquad filter state for Direct Form II Transposed:
+        // [band 0..2][channel 0..1][delay d1, d2]
+        // Band 0: Bass (Low-shelf @ 100 Hz, Q = 0.707)
+        // Band 1: Midrange (Peaking @ 1000 Hz, Q = 1.0)
+        // Band 2: Treble (High-shelf @ 8000 Hz, Q = 0.707)
+        private final float[][][] eqState = new float[3][2][2];
+        private final float[][] eqCoeffs = new float[3][5];
+        private volatile boolean eqCoeffsDirty = true;
+        private float lastSampleRate = 48000.0f;
 
         // Telemetry: track processed sample frames
         private volatile long processedFramesTotal = 0;
@@ -922,10 +839,42 @@ public class AudioPlayerService extends MediaSessionService {
             this.width = Math.max(0, Math.min(100, width));
             this.distance = Math.max(0, Math.min(100, distance));
             this.azimuth = ((azimuth % 360) + 360) % 360;
+            this.fractionalAzimuth = this.azimuth;
         }
 
         public synchronized void setEnabled(boolean enabled) {
             this.spatialEnabled = enabled;
+        }
+
+        public synchronized void setAutoOrbit(boolean autoOrbit) {
+            this.autoOrbit = autoOrbit;
+        }
+
+        public synchronized void setEqualizerParams(boolean enabled, int bass, int mid, int treble) {
+            this.eqEnabled = enabled;
+            this.bassLevel = Math.max(0, Math.min(100, bass));
+            this.midLevel = Math.max(0, Math.min(100, mid));
+            this.trebleLevel = Math.max(0, Math.min(100, treble));
+            this.eqCoeffsDirty = true;
+        }
+
+        public synchronized void setEqualizerEnabled(boolean enabled) {
+            this.eqEnabled = enabled;
+        }
+
+        public JSONObject getEqualizerStatus() {
+            JSONObject obj = new JSONObject();
+            try {
+                obj.put("isAvailable", true);
+                obj.put("enabled", eqEnabled);
+                obj.put("bass", bassLevel);
+                obj.put("mid", midLevel);
+                obj.put("treble", trebleLevel);
+                obj.put("numBands", 3);
+                obj.put("hasControl", true);
+                obj.put("mode", "ExoPlayer Native PCM 3-Band Biquad EQ (Screen-off Resilient)");
+            } catch (Exception ignored) {}
+            return obj;
         }
 
         public synchronized void savePreferences(Context context) {
@@ -937,6 +886,11 @@ public class AudioPlayerService extends MediaSessionService {
                     .putInt("spatial_width", width)
                     .putInt("spatial_distance", distance)
                     .putInt("spatial_azimuth", azimuth)
+                    .putBoolean("spatial_auto_orbit", autoOrbit)
+                    .putBoolean("eq_enabled", eqEnabled)
+                    .putInt("eq_bass", bassLevel)
+                    .putInt("eq_mid", midLevel)
+                    .putInt("eq_treble", trebleLevel)
                     .apply();
             } catch (Exception ignored) {}
         }
@@ -949,6 +903,13 @@ public class AudioPlayerService extends MediaSessionService {
                 width = prefs.getInt("spatial_width", 80);
                 distance = prefs.getInt("spatial_distance", 40);
                 azimuth = prefs.getInt("spatial_azimuth", 0);
+                fractionalAzimuth = azimuth;
+                autoOrbit = prefs.getBoolean("spatial_auto_orbit", false);
+                eqEnabled = prefs.getBoolean("eq_enabled", true);
+                bassLevel = prefs.getInt("eq_bass", 50);
+                midLevel = prefs.getInt("eq_mid", 50);
+                trebleLevel = prefs.getInt("eq_treble", 50);
+                eqCoeffsDirty = true;
             } catch (Exception ignored) {}
         }
 
@@ -963,16 +924,104 @@ public class AudioPlayerService extends MediaSessionService {
                 obj.put("spatialWidth", width);
                 obj.put("spatialDistance", distance);
                 obj.put("spatialAzimuth", azimuth);
+                obj.put("autoOrbit", autoOrbit);
+                obj.put("eqEnabled", eqEnabled);
+                obj.put("eqBass", bassLevel);
+                obj.put("eqMid", midLevel);
+                obj.put("eqTreble", trebleLevel);
                 obj.put("processedFramesTotal", processedFramesTotal);
                 obj.put("sampleRate", (inputAudioFormat != null) ? inputAudioFormat.sampleRate : 0);
                 obj.put("channelCount", (inputAudioFormat != null) ? inputAudioFormat.channelCount : 0);
                 obj.put("encoding", (inputAudioFormat != null) ?
                     (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT ? "PCM_16BIT" :
                      (inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT ? "PCM_FLOAT" : "OTHER")) : "NONE");
-                obj.put("isBypassed", !spatialEnabled || !active || (intensity <= 0));
-                obj.put("mode", "ExoPlayer Custom DSP Engine (Binaural ITD/ILD + M/S Width + Air Absorption)");
+                obj.put("isBypassed", (!spatialEnabled || intensity <= 0) && (!eqEnabled || (bassLevel == 50 && midLevel == 50 && trebleLevel == 50)));
+                obj.put("mode", "ExoPlayer Custom DSP Engine (PCM Biquad EQ + Binaural ITD/ILD)");
             } catch (Exception ignored) {}
             return obj;
+        }
+
+        private void updateEqCoefficients(float sampleRate) {
+            if (sampleRate <= 0) sampleRate = 48000.0f;
+            lastSampleRate = sampleRate;
+
+            // 1. Bass (Low Shelf at 100 Hz, Q = 0.707)
+            float bassGainDb = (bassLevel - 50) * 0.24f; // -12dB .. +12dB
+            computeLowShelfCoeffs(100.0f, bassGainDb, sampleRate, eqCoeffs[0]);
+
+            // 2. Midrange (Peaking at 1000 Hz, Q = 1.0)
+            float midGainDb = (midLevel - 50) * 0.24f; // -12dB .. +12dB
+            computePeakingCoeffs(1000.0f, 1.0f, midGainDb, sampleRate, eqCoeffs[1]);
+
+            // 3. Treble (High Shelf at 8000 Hz, Q = 0.707)
+            float trebleGainDb = (trebleLevel - 50) * 0.24f; // -12dB .. +12dB
+            computeHighShelfCoeffs(8000.0f, trebleGainDb, sampleRate, eqCoeffs[2]);
+
+            eqCoeffsDirty = false;
+        }
+
+        private static void computeLowShelfCoeffs(float f0, float gainDb, float Fs, float[] out) {
+            if (Math.abs(gainDb) < 0.05f) {
+                out[0] = 1.0f; out[1] = 0.0f; out[2] = 0.0f; out[3] = 0.0f; out[4] = 0.0f;
+                return;
+            }
+            double A = Math.pow(10.0, gainDb / 40.0);
+            double omega = 2.0 * Math.PI * f0 / Fs;
+            double cosw = Math.cos(omega);
+            double sinw = Math.sin(omega);
+            double twoSqrtAAlpha = sinw * Math.sqrt(2.0 * A);
+
+            double a0 = (A + 1.0) + (A - 1.0) * cosw + twoSqrtAAlpha;
+            out[0] = (float) ((A * ((A + 1.0) - (A - 1.0) * cosw + twoSqrtAAlpha)) / a0);
+            out[1] = (float) ((2.0 * A * ((A - 1.0) - (A + 1.0) * cosw)) / a0);
+            out[2] = (float) ((A * ((A + 1.0) - (A - 1.0) * cosw - twoSqrtAAlpha)) / a0);
+            out[3] = (float) ((-2.0 * ((A - 1.0) + (A + 1.0) * cosw)) / a0);
+            out[4] = (float) (((A + 1.0) + (A - 1.0) * cosw - twoSqrtAAlpha) / a0);
+        }
+
+        private static void computePeakingCoeffs(float f0, float Q, float gainDb, float Fs, float[] out) {
+            if (Math.abs(gainDb) < 0.05f) {
+                out[0] = 1.0f; out[1] = 0.0f; out[2] = 0.0f; out[3] = 0.0f; out[4] = 0.0f;
+                return;
+            }
+            double A = Math.pow(10.0, gainDb / 40.0);
+            double omega = 2.0 * Math.PI * f0 / Fs;
+            double cosw = Math.cos(omega);
+            double sinw = Math.sin(omega);
+            double alpha = sinw / (2.0 * Q);
+
+            double a0 = 1.0 + alpha / A;
+            out[0] = (float) ((1.0 + alpha * A) / a0);
+            out[1] = (float) ((-2.0 * cosw) / a0);
+            out[2] = (float) ((1.0 - alpha * A) / a0);
+            out[3] = (float) ((-2.0 * cosw) / a0);
+            out[4] = (float) ((1.0 - alpha / A) / a0);
+        }
+
+        private static void computeHighShelfCoeffs(float f0, float gainDb, float Fs, float[] out) {
+            if (Math.abs(gainDb) < 0.05f) {
+                out[0] = 1.0f; out[1] = 0.0f; out[2] = 0.0f; out[3] = 0.0f; out[4] = 0.0f;
+                return;
+            }
+            double A = Math.pow(10.0, gainDb / 40.0);
+            double omega = 2.0 * Math.PI * f0 / Fs;
+            double cosw = Math.cos(omega);
+            double sinw = Math.sin(omega);
+            double twoSqrtAAlpha = sinw * Math.sqrt(2.0 * A);
+
+            double a0 = (A + 1.0) - (A - 1.0) * cosw + twoSqrtAAlpha;
+            out[0] = (float) ((A * ((A + 1.0) + (A - 1.0) * cosw + twoSqrtAAlpha)) / a0);
+            out[1] = (float) ((-2.0 * A * ((A - 1.0) + (A + 1.0) * cosw)) / a0);
+            out[2] = (float) ((A * ((A + 1.0) + (A - 1.0) * cosw - twoSqrtAAlpha)) / a0);
+            out[3] = (float) ((2.0 * ((A - 1.0) - (A + 1.0) * cosw)) / a0);
+            out[4] = (float) (((A + 1.0) - (A - 1.0) * cosw - twoSqrtAAlpha) / a0);
+        }
+
+        private static float processBiquad(float in, float[] c, float[] s) {
+            float y = c[0] * in + s[0];
+            s[0] = c[1] * in - c[3] * y + s[1];
+            s[1] = c[2] * in - c[4] * y;
+            return y;
         }
 
         @Override
@@ -996,6 +1045,7 @@ public class AudioPlayerService extends MediaSessionService {
             int outEncoding = is16Bit ? C.ENCODING_PCM_16BIT : C.ENCODING_PCM_FLOAT;
             this.outputAudioFormat = new AudioProcessor.AudioFormat(inputAudioFormat.sampleRate, 2, outEncoding);
             this.isAttachedToSink = true;
+            this.eqCoeffsDirty = true;
             Log.i(TAG, "Configured SpatialAudioProcessor: inRate=" + inputAudioFormat.sampleRate +
                     ", inChannels=" + inputAudioFormat.channelCount + ", encoding=" + (is16Bit ? "16BIT" : "FLOAT") + " -> outStereo");
             return outputAudioFormat;
@@ -1038,10 +1088,24 @@ public class AudioPlayerService extends MediaSessionService {
             final float curIntensity = this.intensity / 100.0f;
             final float curWidth = this.width / 100.0f;
             final float curDistance = this.distance / 100.0f;
+            final float sampleRate = (inputAudioFormat.sampleRate > 0) ? (float) inputAudioFormat.sampleRate : 48000.0f;
+
+            if (eqCoeffsDirty || sampleRate != lastSampleRate) {
+                updateEqCoefficients(sampleRate);
+            }
+
+            final boolean eqActive = this.eqEnabled && (this.bassLevel != 50 || this.midLevel != 50 || this.trebleLevel != 50);
+            final boolean spatialActive = enabled && (curIntensity > 0.001f);
+
+            // Smooth native auto-orbit during screen-off / background playback
+            if (this.autoOrbit && spatialEnabled) {
+                fractionalAzimuth = (fractionalAzimuth + (30.0 * frameCount / sampleRate)) % 360.0;
+                this.azimuth = (int) fractionalAzimuth;
+            }
             final int curAzimuth = this.azimuth;
 
-            // If spatial is bypassed or intensity is zero, do pure passthrough
-            if (!enabled || curIntensity <= 0.001f) {
+            // Pure passthrough only if BOTH Equalizer and Spatial Audio are bypassed
+            if (!eqActive && !spatialActive) {
                 if (inChannelCount == 2) {
                     // Direct stereo copy bounded by frameCount
                     int bytesToCopy = frameCount * inBytesPerFrame;
@@ -1072,11 +1136,8 @@ public class AudioPlayerService extends MediaSessionService {
                 return;
             }
 
-            // Calculate DSP coefficients:
-            final float sampleRate = (inputAudioFormat.sampleRate > 0) ? (float) inputAudioFormat.sampleRate : 48000.0f;
-
+            // Calculate Spatial DSP coefficients:
             // 1. Stereo Width (Mid/Side Matrix factor):
-            // 0.0 (Mono) -> 1.0 (Normal stereo at 50%) -> 2.2 (Ultra-wide at 100%)
             final float widthFactor = (curWidth < 0.5f)
                     ? (curWidth / 0.5f)
                     : (1.0f + ((curWidth - 0.5f) / 0.5f) * 1.2f);
@@ -1105,7 +1166,6 @@ public class AudioPlayerService extends MediaSessionService {
             final float rearAlpha = 1.0f - (rearAmount * 0.42f); // 1.0 (front) to 0.58 (back)
 
             // 3. Distance & Air Absorption Filter:
-            // High frequencies attenuate exponentially with distance (20 kHz down to ~3.8 kHz)
             final float airAlpha = (float) Math.exp(-2.0 * Math.PI * (18000.0 - curDistance * 14500.0) / sampleRate);
             final float distGain = 1.0f - (curDistance * 0.22f); // subtle distance attenuation
 
@@ -1127,6 +1187,34 @@ public class AudioPlayerService extends MediaSessionService {
                 } else {
                     inL = inputBuffer.getFloat();
                     inR = (inChannelCount == 2) ? inputBuffer.getFloat() : inL;
+                }
+
+                // Step 0: Apply 3-Band Parametric Equalizer (Native PCM Biquad Chain)
+                if (eqActive) {
+                    inL = processBiquad(inL, eqCoeffs[0], eqState[0][0]);
+                    inL = processBiquad(inL, eqCoeffs[1], eqState[1][0]);
+                    inL = processBiquad(inL, eqCoeffs[2], eqState[2][0]);
+
+                    inR = processBiquad(inR, eqCoeffs[0], eqState[0][1]);
+                    inR = processBiquad(inR, eqCoeffs[1], eqState[1][1]);
+                    inR = processBiquad(inR, eqCoeffs[2], eqState[2][1]);
+                }
+
+                if (!spatialActive) {
+                    // Equalizer active without spatial processing
+                    float outL = softClip(inL);
+                    float outR = softClip(inR);
+
+                    if (is16Bit) {
+                        short finalShortL = (short) Math.max(-32768, Math.min(32767, Math.round(outL * 32767.0f)));
+                        short finalShortR = (short) Math.max(-32768, Math.min(32767, Math.round(outR * 32767.0f)));
+                        buffer.putShort(finalShortL);
+                        buffer.putShort(finalShortR);
+                    } else {
+                        buffer.putFloat(outL);
+                        buffer.putFloat(outR);
+                    }
+                    continue;
                 }
 
                 // Step A: Mid/Side Stereo Widening
@@ -1254,6 +1342,12 @@ public class AudioPlayerService extends MediaSessionService {
             rearFilterR = 0.0f;
             airFilterL = 0.0f;
             airFilterR = 0.0f;
+
+            // Reset biquad delay registers
+            for (int b = 0; b < 3; b++) {
+                eqState[b][0][0] = 0.0f; eqState[b][0][1] = 0.0f;
+                eqState[b][1][0] = 0.0f; eqState[b][1][1] = 0.0f;
+            }
 
             // Zero out ITD circular delay lines and reset write index
             Arrays.fill(delayLineL, 0.0f);

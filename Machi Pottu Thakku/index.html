@@ -337,7 +337,7 @@
                 <div class="drawer-header">
                     <div class="drawer-title-group">
                         <div class="drawer-title"><i data-lucide="sliders" style="width: 20px; height: 20px; margin-right: 8px; color: var(--accent-color);"></i> Equalizer</div>
-                        <div class="drawer-subtitle" id="eq-status-label">Native DSP Audio Effects</div>
+                        <div class="drawer-subtitle" id="eq-status-label">Studio DSP Equalizer</div>
                     </div>
                     <div style="display: flex; align-items: center; gap: 12px;">
                         <label class="eq-toggle-wrap" title="Toggle Equalizer">
@@ -489,23 +489,6 @@
                             </div>
                             <input type="range" class="eq-slider" id="spatial-slider-distance" min="0" max="100" value="40">
                         </div>
-                    </div>
-
-                    <!-- 3D Audio Demo Card -->
-                    <div class="spatial-demo-card">
-                        <div class="demo-card-content">
-                            <div class="demo-card-icon">
-                                <i data-lucide="bike" style="width: 26px; height: 26px; color: var(--accent-color);"></i>
-                            </div>
-                            <div class="demo-card-info">
-                                <div class="demo-card-title">3D Motorcycle Flyby Demo</div>
-                                <div class="demo-card-sub">Approaches left, roars past, fades right (wear headphones)</div>
-                            </div>
-                        </div>
-                        <button id="btn-spatial-demo" class="spatial-demo-btn" onclick="window.player.toggle3DMotorcycleDemo()">
-                            <i data-lucide="play" id="spatial-demo-icon"></i>
-                            <span id="spatial-demo-text">Play 3D Demo</span>
-                        </button>
                     </div>
                 </div>
             </div>

@@ -707,11 +707,6 @@ class AudioPlayer {
     }
 
     async playTrack(track, queueList = [], index = 0, isSync = false) {
-        if (this.isDemoRunning) {
-            this.stop3DMotorcycleDemo();
-            this.wasPlayingBeforeDemo = false;
-        }
-
         if (!track?.s3Key && track?.id) {
             let canonical = null;
             if (window.app?.musicLibrary && window.app.musicLibrary.length > 0) {
@@ -978,11 +973,6 @@ class AudioPlayer {
     }
 
     togglePlay() {
-        if (this.isDemoRunning) {
-            this.stop3DMotorcycleDemo();
-            this.wasPlayingBeforeDemo = false;
-        }
-
         if (!this.currentTrack) return;
 
         if (window.syncManager?.isReceiver()) {
@@ -1501,10 +1491,19 @@ class AudioPlayer {
             this.audio.loop = (mode === 'one');
         }
 
+        if (window.syncManager?.isHost()) {
+            window.syncManager.broadcastRepeatMode(mode);
+        }
+
         this.updateRepeatUI();
     }
 
     toggleRepeatMode() {
+        if (window.syncManager?.isReceiver()) {
+            window.uiManager?.showNotification("Host controls repeat mode in Listen Together.", "info");
+            return;
+        }
+
         const next = this.repeatMode === 'off' ? 'all' : (this.repeatMode === 'all' ? 'one' : 'off');
         this.setRepeatMode(next);
         const labels = { off: 'Repeat Off', all: 'Repeat All', one: 'Repeat One' };
@@ -1920,10 +1919,8 @@ class AudioPlayer {
         if (label) {
             if (!this.eqEnabled) {
                 label.textContent = 'Equalizer Bypassed (Off)';
-            } else if (Capacitor.isNativePlatform()) {
-                label.textContent = 'Native Hardware Equalizer Active';
             } else {
-                label.textContent = 'Web Audio DSP Active';
+                label.textContent = 'Studio DSP Equalizer Active';
             }
         }
     }
@@ -1940,12 +1937,8 @@ class AudioPlayer {
                     if (label) {
                         if (!this.eqEnabled) {
                             label.textContent = 'Equalizer Bypassed (Off)';
-                        } else if (status && status.isAvailable) {
-                            const bands = status.numBands ? `${status.numBands}-Band ` : '';
-                            const ctrl = status.hasControl ? 'Hardware DSP Active' : 'DSP Attached';
-                            label.textContent = `${bands}${ctrl} (Session ${status.sessionId || 'Ready'})`;
                         } else {
-                            label.textContent = 'DSP Initializing / Waiting for Playback';
+                            label.textContent = 'Studio DSP Equalizer Active';
                         }
                     }
                 }).catch(() => {});
@@ -2012,7 +2005,8 @@ class AudioPlayer {
                 intensity: this.spatialSettings.intensity,
                 width: this.spatialSettings.width,
                 distance: this.spatialSettings.distance,
-                azimuth: this.spatialSettings.azimuth
+                azimuth: this.spatialSettings.azimuth,
+                autoOrbit: !!this.spatialSettings.autoOrbit
             });
         } catch (e) {
             console.warn("[SPATIAL] Failed to set native spatial params:", e);
@@ -2145,266 +2139,7 @@ class AudioPlayer {
         this.setSpatialPositionPreset('front');
     }
 
-    // 3D Audio Demonstration (Procedural Motorcycle Approach & Flyby)
-    async toggle3DMotorcycleDemo() {
-        if (this.isDemoRunning) {
-            this.stop3DMotorcycleDemo();
-        } else {
-            this.play3DMotorcycleDemo();
-        }
-    }
 
-    async play3DMotorcycleDemo() {
-        if (this.isDemoRunning) return;
-        this.isDemoRunning = true;
-
-        const demoBtn = document.getElementById('btn-spatial-demo');
-        const demoText = document.getElementById('spatial-demo-text');
-        const demoIcon = document.getElementById('spatial-demo-icon');
-        if (demoBtn) demoBtn.classList.add('demo-running');
-        if (demoText) demoText.textContent = 'Stop Demo';
-        if (demoIcon) demoIcon.setAttribute('data-lucide', 'square');
-        if (window.lucide) lucide.createIcons();
-
-        // If music was playing, pause it gracefully
-        this.wasPlayingBeforeDemo = false;
-        if (Capacitor.isNativePlatform() && this.nativeInitialized) {
-            try {
-                const { isPlaying } = await NativeAudio.isPlaying({ audioId: 'main' });
-                if (isPlaying) {
-                    this.wasPlayingBeforeDemo = true;
-                    await NativeAudio.pause({ audioId: 'main' });
-                    this.syncUIState(false);
-                }
-            } catch(e) {}
-        } else if (this.audio && !this.audio.paused) {
-            this.wasPlayingBeforeDemo = true;
-            this.audio.pause();
-            this.syncUIState(false);
-        }
-
-        // Initialize AudioContext for demo
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (!this.demoAudioCtx) {
-            this.demoAudioCtx = new AudioContext();
-        }
-        if (this.demoAudioCtx.state === 'suspended') {
-            await this.demoAudioCtx.resume();
-        }
-
-        const ctx = this.demoAudioCtx;
-        const startTime = ctx.currentTime;
-        const duration = 9.0; // 9-second flyby sequence
-
-        // Procedural Motorcycle Audio Synthesis Graph:
-        // 1. Two harmonic oscillators simulating combustion cylinders
-        const osc1 = ctx.createOscillator();
-        const osc2 = ctx.createOscillator();
-        osc1.type = 'sawtooth';
-        osc2.type = 'triangle';
-
-        // 2. Sub-bass thump oscillator for engine rumble
-        const subOsc = ctx.createOscillator();
-        subOsc.type = 'sawtooth';
-
-        // 3. Cylinder resonance filter (exhaust body)
-        const exhaustFilter = ctx.createBiquadFilter();
-        exhaustFilter.type = 'bandpass';
-        exhaustFilter.frequency.setValueAtTime(320, startTime);
-        exhaustFilter.Q.setValueAtTime(3.2, startTime);
-
-        // 4. Air absorption distance filter
-        const airFilter = ctx.createBiquadFilter();
-        airFilter.type = 'lowpass';
-        airFilter.frequency.setValueAtTime(900, startTime);
-
-        // 5. Engine gain envelope
-        const masterGain = ctx.createGain();
-        masterGain.gain.setValueAtTime(0.001, startTime);
-
-        // 6. HRTF 3D Panner
-        const demoPanner = ctx.createPanner();
-        demoPanner.panningModel = 'HRTF';
-        demoPanner.distanceModel = 'inverse';
-        demoPanner.refDistance = 1;
-        demoPanner.maxDistance = 100;
-        demoPanner.rolloffFactor = 1.0;
-
-        // Wire nodes:
-        osc1.connect(exhaustFilter);
-        osc2.connect(exhaustFilter);
-        subOsc.connect(exhaustFilter);
-        exhaustFilter.connect(airFilter);
-        airFilter.connect(masterGain);
-        masterGain.connect(demoPanner);
-        demoPanner.connect(ctx.destination);
-
-        // Pitch & Throttle Evolution (with Doppler pitch drop)
-        osc1.frequency.setValueAtTime(54, startTime);
-        osc1.frequency.exponentialRampToValueAtTime(82, startTime + 4.2);
-        osc2.frequency.setValueAtTime(108, startTime);
-        osc2.frequency.exponentialRampToValueAtTime(164, startTime + 4.2);
-        subOsc.frequency.setValueAtTime(27, startTime);
-        subOsc.frequency.exponentialRampToValueAtTime(41, startTime + 4.2);
-
-        // Doppler pitch drop at flyby
-        osc1.frequency.setValueAtTime(82, startTime + 4.3);
-        osc1.frequency.exponentialRampToValueAtTime(50, startTime + 4.8);
-        osc2.frequency.setValueAtTime(164, startTime + 4.3);
-        osc2.frequency.exponentialRampToValueAtTime(100, startTime + 4.8);
-        subOsc.frequency.setValueAtTime(41, startTime + 4.3);
-        subOsc.frequency.exponentialRampToValueAtTime(25, startTime + 4.8);
-
-        // Accelerate into distance
-        osc1.frequency.exponentialRampToValueAtTime(42, startTime + duration);
-        osc2.frequency.exponentialRampToValueAtTime(84, startTime + duration);
-        subOsc.frequency.exponentialRampToValueAtTime(21, startTime + duration);
-
-        // Read current spatial settings to parameterize the demo
-        const userIntensity = Math.max(0.25, (this.spatialSettings.intensity || 75) / 100.0);
-        const userWidth = Math.max(0.3, (this.spatialSettings.width || 80) / 100.0);
-        const userDistance = Math.max(0.2, (this.spatialSettings.distance || 40) / 100.0);
-
-        // Volume Envelope scaled by intensity
-        masterGain.gain.setValueAtTime(0.005, startTime);
-        masterGain.gain.exponentialRampToValueAtTime(0.35 * userIntensity, startTime + 3.0);
-        masterGain.gain.linearRampToValueAtTime(0.85 * userIntensity, startTime + 4.4);
-        masterGain.gain.setValueAtTime(0.85 * userIntensity, startTime + 4.6);
-        masterGain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
-
-        // Air Absorption Filter scaled by distance
-        const initialAirFreq = Math.max(450, 1100 - userDistance * 600);
-        const peakAirFreq = Math.max(6500, 13000 - userDistance * 5000);
-        const endAirFreq = Math.max(350, 800 - userDistance * 450);
-        airFilter.frequency.setValueAtTime(initialAirFreq, startTime);
-        airFilter.frequency.exponentialRampToValueAtTime(peakAirFreq, startTime + 4.4);
-        airFilter.frequency.exponentialRampToValueAtTime(endAirFreq, startTime + duration);
-
-        // Start Oscillators
-        osc1.start(startTime);
-        osc2.start(startTime);
-        subOsc.start(startTime);
-        osc1.stop(startTime + duration);
-        osc2.stop(startTime + duration);
-        subOsc.stop(startTime + duration);
-
-        this.currentDemoNodes = {
-            osc1,
-            osc2,
-            subOsc,
-            exhaustFilter,
-            airFilter,
-            masterGain,
-            demoPanner
-        };
-
-        // Real-Time 3D Trajectory Animation across 360° Space:
-        const startDist = 18.0 + userDistance * 16.0; // 21m to 34m
-        const passDist = 0.8 + userDistance * 3.0;   // 1.4m to 3.8m
-        const spanX = 14.0 + userWidth * 16.0;       // 18m to 30m
-
-        const animStart = performance.now();
-        const updatePanner = () => {
-            if (!this.isDemoRunning) return;
-            const elapsed = (performance.now() - animStart) / 1000.0;
-            const progress = Math.min(1.0, elapsed / duration);
-
-            let x, z;
-            if (progress < 0.48) {
-                const t = progress / 0.48;
-                // Approach from front-left
-                x = -spanX + t * (spanX - passDist);
-                z = -startDist + t * startDist;
-            } else {
-                const t = (progress - 0.48) / 0.52;
-                // Roar past to rear-right
-                x = -passDist + t * (spanX + passDist);
-                z = t * (startDist * 1.1);
-            }
-
-            if (demoPanner.positionX) {
-                demoPanner.positionX.setValueAtTime(x, ctx.currentTime);
-                demoPanner.positionY.setValueAtTime(0, ctx.currentTime);
-                demoPanner.positionZ.setValueAtTime(z, ctx.currentTime);
-            } else if (typeof demoPanner.setPosition === 'function') {
-                demoPanner.setPosition(x, 0, z);
-            }
-
-            // Update UI Radar Widget dynamically
-            const rad = Math.atan2(x, -z);
-            let deg = Math.round((rad * 180.0) / Math.PI);
-            deg = ((deg % 360) + 360) % 360;
-            const dist = Math.min(1.0, Math.sqrt(x * x + z * z) / 25.0);
-
-            const radar = document.getElementById('spatial-radar');
-            const puck = document.getElementById('spatial-puck');
-            const lbl = document.getElementById('spatial-azimuth-label');
-            if (radar && puck) {
-                const radius = (radar.offsetWidth / 2) - 16;
-                const px = Math.sin(rad) * dist * radius;
-                const py = -Math.cos(rad) * dist * radius;
-                puck.style.transform = `translate(${px}px, ${py}px)`;
-            }
-            if (lbl) {
-                lbl.textContent = `3D DEMO: ${deg}° • ${Math.round(dist * 100)}% DIST`;
-            }
-
-            if (progress < 1.0) {
-                this.demoAnimFrame = requestAnimationFrame(updatePanner);
-            } else {
-                this.stop3DMotorcycleDemo();
-            }
-        };
-
-        this.demoAnimFrame = requestAnimationFrame(updatePanner);
-    }
-
-    stop3DMotorcycleDemo() {
-        if (!this.isDemoRunning) return;
-        this.isDemoRunning = false;
-        if (this.demoAnimFrame) {
-            cancelAnimationFrame(this.demoAnimFrame);
-            this.demoAnimFrame = null;
-        }
-
-        if (this.currentDemoNodes) {
-            try {
-                this.currentDemoNodes.masterGain.gain.setValueAtTime(0, this.demoAudioCtx?.currentTime || 0);
-                try { this.currentDemoNodes.osc1.stop(); } catch(e) {}
-                try { this.currentDemoNodes.osc2.stop(); } catch(e) {}
-                try { this.currentDemoNodes.subOsc.stop(); } catch(e) {}
-                try { this.currentDemoNodes.osc1.disconnect(); } catch(e) {}
-                try { this.currentDemoNodes.osc2.disconnect(); } catch(e) {}
-                try { this.currentDemoNodes.subOsc.disconnect(); } catch(e) {}
-                try { this.currentDemoNodes.exhaustFilter.disconnect(); } catch(e) {}
-                try { this.currentDemoNodes.airFilter.disconnect(); } catch(e) {}
-                try { this.currentDemoNodes.masterGain.disconnect(); } catch(e) {}
-                try { this.currentDemoNodes.demoPanner.disconnect(); } catch(e) {}
-            } catch(e) {}
-            this.currentDemoNodes = null;
-        }
-
-        const demoBtn = document.getElementById('btn-spatial-demo');
-        const demoText = document.getElementById('spatial-demo-text');
-        const demoIcon = document.getElementById('spatial-demo-icon');
-        if (demoBtn) demoBtn.classList.remove('demo-running');
-        if (demoText) demoText.textContent = 'Play 3D Demo';
-        if (demoIcon) demoIcon.setAttribute('data-lucide', 'play');
-        if (window.lucide) lucide.createIcons();
-
-        // Restore saved radar position
-        this.updateSpatialRadarUI();
-
-        // Restore music playback if was playing
-        if (this.wasPlayingBeforeDemo) {
-            this.wasPlayingBeforeDemo = false;
-            if (Capacitor.isNativePlatform() && this.nativeInitialized) {
-                NativeAudio.play({ audioId: 'main' }).then(() => this.syncUIState(true)).catch(() => {});
-            } else if (this.audio && this.audio.src) {
-                this.audio.play().then(() => this.syncUIState(true)).catch(() => {});
-            }
-        }
-    }
 
     // Radar Touch / Pointer Interaction
     setupSpatialRadar() {
@@ -2574,9 +2309,6 @@ class AudioPlayer {
     }
 
     closeSpatialDrawer() {
-        if (this.isDemoRunning) {
-            this.stop3DMotorcycleDemo();
-        }
         const drawer = document.getElementById('drawer-spatial');
         if (drawer) {
             drawer.classList.remove('active');

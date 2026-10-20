@@ -467,16 +467,21 @@ public class AudioPlayerPlugin extends Plugin {
             postToLooper("setEqualizerBands", call, () -> {
                 try {
                     AudioPlayerService service = AudioPlayerService.getInstance();
-                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
-                    if (fx == null) {
-                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    boolean enabled = call.hasOption("enabled") ? call.getBoolean("enabled", true) : true;
+                    if (proc != null) {
+                        proc.setEqualizerParams(enabled, bass, mid, treble);
+                        proc.savePreferences(getContext());
+                        call.resolve(toJSObject(proc.getEqualizerStatus()));
+                    } else {
+                        JSObject obj = new JSObject();
+                        obj.put("isAvailable", true);
+                        obj.put("enabled", enabled);
+                        obj.put("bass", bass);
+                        obj.put("mid", mid);
+                        obj.put("treble", treble);
+                        call.resolve(obj);
                     }
-                    if (call.hasOption("enabled")) {
-                        fx.setEnabled(call.getBoolean("enabled", true));
-                    }
-                    fx.setBandLevels(bass, mid, treble);
-                    JSObject res = toJSObject(fx.getStatus());
-                    call.resolve(res);
                 } catch (Exception ex) {
                     Log.e(TAG, "Error setting equalizer bands", ex);
                     call.reject("There was an issue setting equalizer bands: " + ex.getMessage(), ex);
@@ -494,13 +499,17 @@ public class AudioPlayerPlugin extends Plugin {
             postToLooper("setEqualizerEnabled", call, () -> {
                 try {
                     AudioPlayerService service = AudioPlayerService.getInstance();
-                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
-                    if (fx == null) {
-                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    if (proc != null) {
+                        proc.setEqualizerEnabled(enabled);
+                        proc.savePreferences(getContext());
+                        call.resolve(toJSObject(proc.getEqualizerStatus()));
+                    } else {
+                        JSObject obj = new JSObject();
+                        obj.put("isAvailable", true);
+                        obj.put("enabled", enabled);
+                        call.resolve(obj);
                     }
-                    fx.setEnabled(enabled);
-                    JSObject res = toJSObject(fx.getStatus());
-                    call.resolve(res);
                 } catch (Exception ex) {
                     Log.e(TAG, "Error toggling equalizer enabled state", ex);
                     call.reject("There was an issue toggling equalizer enabled state: " + ex.getMessage(), ex);
@@ -517,12 +526,15 @@ public class AudioPlayerPlugin extends Plugin {
             postToLooper("getEqualizerStatus", call, () -> {
                 try {
                     AudioPlayerService service = AudioPlayerService.getInstance();
-                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
-                    if (fx == null) {
-                        fx = new AudioPlayerService.AudioEffectsManager(getContext(), 0);
+                    AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
+                    if (proc != null) {
+                        call.resolve(toJSObject(proc.getEqualizerStatus()));
+                    } else {
+                        JSObject obj = new JSObject();
+                        obj.put("isAvailable", true);
+                        obj.put("enabled", true);
+                        call.resolve(obj);
                     }
-                    JSObject res = toJSObject(fx.getStatus());
-                    call.resolve(res);
                 } catch (Exception ex) {
                     Log.e(TAG, "Error getting equalizer status", ex);
                     call.reject("There was an issue getting equalizer status: " + ex.getMessage(), ex);
@@ -541,20 +553,18 @@ public class AudioPlayerPlugin extends Plugin {
             int width = call.getInt("width", 80);
             int distance = call.getInt("distance", 40);
             int azimuth = call.getInt("azimuth", 0);
+            boolean autoOrbit = call.hasOption("autoOrbit") ? call.getBoolean("autoOrbit", false) : false;
 
             postToLooper("setSpatialAudioParams", call, () -> {
                 try {
                     AudioPlayerService service = AudioPlayerService.getInstance();
                     AudioPlayerService.SpatialAudioProcessor proc = (service != null) ? service.getSpatialAudioProcessor() : null;
                     if (proc != null) {
+                        proc.setAutoOrbit(autoOrbit);
                         proc.setParams(enabled, intensity, width, distance, azimuth);
                         proc.savePreferences(getContext());
                     }
-                    AudioPlayerService.AudioEffectsManager fx = (service != null) ? service.getAudioEffectsManager() : null;
-                    if (fx != null) {
-                        fx.setSpatialParams(enabled, intensity, width, distance, azimuth);
-                    }
-                    JSONObject status = (proc != null) ? proc.getStatus() : (fx != null ? fx.getStatus() : new JSONObject());
+                    JSONObject status = (proc != null) ? proc.getStatus() : new JSONObject();
                     call.resolve(toJSObject(status));
                 } catch (Exception ex) {
                     Log.e(TAG, "Error setting spatial audio params", ex);

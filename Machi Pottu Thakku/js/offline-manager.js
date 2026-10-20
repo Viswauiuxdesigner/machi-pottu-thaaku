@@ -75,6 +75,37 @@ class OfflineManagerClass {
             // Backup file does not exist yet; persist initial state
             this.persistMetadataToDisk();
         }
+
+        // Safely clean up any abandoned zero-byte download fragments without affecting valid tracks
+        try {
+            if (typeof this.Filesystem.readdir === 'function') {
+                const dirResult = await this.Filesystem.readdir({
+                    path: '',
+                    directory: this.Directory.Data
+                });
+                const files = dirResult?.files || [];
+                for (const item of files) {
+                    const fname = typeof item === 'string' ? item : item?.name;
+                    if (fname && fname.startsWith('offline_')) {
+                        try {
+                            const stat = await this.Filesystem.stat({
+                                path: fname,
+                                directory: this.Directory.Data
+                            });
+                            if (stat && stat.size === 0) {
+                                await this.Filesystem.deleteFile({
+                                    path: fname,
+                                    directory: this.Directory.Data
+                                });
+                                console.log(`[OFFLINE] Cleaned up 0-byte incomplete download: ${fname}`);
+                            }
+                        } catch (stErr) {}
+                    }
+                }
+            }
+        } catch (cleanupErr) {
+            // readdir is optional/non-fatal
+        }
     }
 
     saveMetadata() {
@@ -179,28 +210,84 @@ class OfflineManagerClass {
         return this.findTrackEntry(trackId);
     }
 
+    async getStorageStats() {
+        const tracks = Object.values(this.offlineTracks);
+        let totalBytes = 0;
+        let verifiedCount = 0;
+
+        for (const track of tracks) {
+            if (track && track.localPath && this.Filesystem && this.Directory) {
+                try {
+                    const stat = await this.Filesystem.stat({
+                        path: track.localPath,
+                        directory: this.Directory.Data
+                    });
+                    if (stat && typeof stat.size === 'number' && stat.size > 0) {
+                        totalBytes += stat.size;
+                        track.fileSize = stat.size;
+                        verifiedCount++;
+                        continue;
+                    }
+                } catch (e) {}
+            }
+            if (track && track.fileSize && typeof track.fileSize === 'number') {
+                totalBytes += track.fileSize;
+                verifiedCount++;
+            }
+        }
+
+        const formatBytes = (bytes) => {
+            if (!bytes || bytes <= 0) return '0 MB';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        };
+
+        return {
+            totalBytes,
+            formattedTotal: formatBytes(totalBytes),
+            trackCount: verifiedCount
+        };
+    }
+
     async downloadTrack(track) {
         if (!track?.id) throw new Error("Invalid track object");
 
+        // Canonical deduplication: check both track.id and s3Key
+        const existingTrack = (track.s3Key && this.findTrackEntry(track.s3Key)) || this.findTrackEntry(track.id);
+        if (existingTrack && await this.isDownloaded(existingTrack.id)) {
+            console.log(`[OFFLINE] Track already downloaded: ${track.title || track.id}`);
+            return existingTrack;
+        }
+
         // Prevent duplicate concurrent downloads
-        if (this.downloadingPromises.has(track.id)) {
+        const downloadKey = track.s3Key || track.id;
+        if (this.downloadingPromises.has(downloadKey)) {
             console.log(`[OFFLINE] Download already in progress for: ${track.title || track.id}`);
-            return this.downloadingPromises.get(track.id);
+            return this.downloadingPromises.get(downloadKey);
         }
 
         const downloadPromise = this._executeDownload(track);
-        this.downloadingPromises.set(track.id, downloadPromise);
+        this.downloadingPromises.set(downloadKey, downloadPromise);
 
         try {
             return await downloadPromise;
         } finally {
-            this.downloadingPromises.delete(track.id);
+            this.downloadingPromises.delete(downloadKey);
         }
     }
 
     async _executeDownload(track) {
         if (await this.isDownloaded(track.id)) {
             return this.getLocalTrack(track.id); // Already downloaded and verified
+        }
+
+        if (track.s3Key) {
+            const existingByKey = this.findTrackEntry(track.s3Key);
+            if (existingByKey && await this.isDownloaded(existingByKey.id)) {
+                return existingByKey;
+            }
         }
 
         if (!track.s3Key) {
@@ -224,7 +311,7 @@ class OfflineManagerClass {
             throw new Error("Failed to fetch presigned URL: " + e.message);
         }
 
-        // 2. Download the actual audio data using Filesystem
+        // 2. Download the actual audio data using Filesystem to a canonical path
         const extension = track.s3Key.split('.').pop() || 'mp3';
         const safeId = String(track.id).replace(/[^a-zA-Z0-9_-]/g, '_');
         const fileName = `offline_${safeId}.${extension}`;
@@ -305,6 +392,7 @@ class OfflineManagerClass {
         const track = this.findTrackEntry(trackId);
         if (!track) return;
 
+        // 1. Delete physical file from filesystem
         if (this.Filesystem && this.Directory && track.localPath) {
             try {
                 await this.Filesystem.deleteFile({
@@ -316,7 +404,30 @@ class OfflineManagerClass {
             }
         }
 
-        delete this.offlineTracks[track.id || trackId];
+        // 2. Clear any cached webview or network URLs from CacheStorage
+        if (typeof window !== 'undefined' && 'caches' in window) {
+            try {
+                const cacheNames = await caches.keys();
+                for (const name of cacheNames) {
+                    const cache = await caches.open(name);
+                    if (track.webViewUrl) await cache.delete(track.webViewUrl);
+                    if (track.nativeUrl) await cache.delete(track.nativeUrl);
+                }
+            } catch (err) {
+                console.warn("[OFFLINE] Cache eviction on track delete error:", err);
+            }
+        }
+
+        // 3. Remove from metadata (by track.id and any matching key)
+        const trackKey = track.id || trackId;
+        delete this.offlineTracks[trackKey];
+        if (trackId !== trackKey) {
+            delete this.offlineTracks[trackId];
+        }
+        if (track.s3Key && this.offlineTracks[track.s3Key]) {
+            delete this.offlineTracks[track.s3Key];
+        }
+
         this.saveMetadata();
         console.log("[OFFLINE] Deleted track from offline storage:", trackId);
     }
